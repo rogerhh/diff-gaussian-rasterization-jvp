@@ -12,11 +12,26 @@
 from typing import NamedTuple
 import torch.nn as nn
 import torch
+import torch.autograd.forward_ad as fwAD
 from . import _C
 
 def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
     return tuple(copied_tensors)
+
+def has_tangent(x):
+    return fwAD.unpack_dual(x).tangent is not None
+
+def get_tangent(x):
+    if isinstance(x, float):
+        return 0.0
+
+    elif has_tangent(x):
+        return fwAD.unpack_dual(x).tangent
+    elif isinstance(x, torch.Tensor):
+        return torch.zeros_like(x)
+    else:
+        raise ValueError(f"Unsupported type for tangent extraction: {type(x)}")
 
 def rasterize_gaussians(
     means3D,
@@ -29,17 +44,69 @@ def rasterize_gaussians(
     cov3Ds_precomp,
     raster_settings,
 ):
-    return _RasterizeGaussians.apply(
-        means3D,
-        means2D,
-        sh,
-        colors_precomp,
-        opacities,
-        scales,
-        rotations,
-        cov3Ds_precomp,
-        raster_settings,
-    )
+    tensor_args = (means3D, means2D, sh, colors_precomp, opacities, scales, rotations, cov3Ds_precomp, raster_settings.bg, raster_settings.viewmatrix, raster_settings.projmatrix, raster_settings.campos)
+
+    jvp = any(has_tangent(x) for x in tensor_args)
+    import code; code.interact(local=locals(), banner="after check jvp")
+
+    if not jvp:
+        return _RasterizeGaussians.apply(
+            means3D,
+            means2D,
+            sh,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            cov3Ds_precomp,
+            raster_settings,
+            jvp,
+            None, None, None, None, None, None, None, None, None,
+        )
+    else:
+        means3D_tangent = get_tangent(means3D)
+        means2D_tangent = get_tangent(means2D)
+        sh_tangent = get_tangent(sh)
+        colors_precomp_tangent = get_tangent(colors_precomp)
+        opacities_tangent = get_tangent(opacities)
+        scales_tangent = get_tangent(scales)
+        rotations_tangent = get_tangent(rotations)
+        cov3Ds_precomp_tangent = get_tangent(cov3Ds_precomp)
+        raster_settings_tangent = GaussianRasterizationSettings(
+                image_height=raster_settings.image_height,
+                image_width=raster_settings.image_width,
+                tanfovx=get_tangent(raster_settings.tanfovx),
+                tanfovy=get_tangent(raster_settings.tanfovy),
+                bg=get_tangent(raster_settings.bg),
+                scale_modifier=get_tangent(raster_settings.scale_modifier),
+                viewmatrix=get_tangent(raster_settings.viewmatrix),
+                projmatrix=get_tangent(raster_settings.projmatrix),
+                sh_degree=raster_settings.sh_degree,
+                campos=get_tangent(raster_settings.campos),
+                prefiltered=raster_settings.prefiltered,
+                debug=raster_settings.debug,
+                antialiasing=raster_settings.antialiasing)
+        return _RasterizeGaussians.apply(
+            means3D,
+            means2D,
+            sh,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            cov3Ds_precomp,
+            raster_settings,
+            jvp,
+            means3D_tangent,
+            means2D_tangent,
+            sh_tangent,
+            colors_precomp_tangent,
+            opacities_tangent,
+            scales_tangent,
+            rotations_tangent,
+            cov3Ds_precomp_tangent,
+            raster_settings_tangent,)
+
 
 class _RasterizeGaussians(torch.autograd.Function):
     @staticmethod
@@ -54,34 +121,92 @@ class _RasterizeGaussians(torch.autograd.Function):
         rotations,
         cov3Ds_precomp,
         raster_settings,
+        jvp,
+        means3D_tangent,
+        means2D_tangent,
+        sh_tangent,
+        colors_precomp_tangent,
+        opacities_tangent,
+        scales_tangent,
+        rotations_tangent,
+        cov3Ds_precomp_tangent,
+        raster_settings_tangent,
     ):
 
-        # Restructure arguments the way that the C++ lib expects them
-        args = (
-            raster_settings.bg, 
-            means3D,
-            colors_precomp,
-            opacities,
-            scales,
-            rotations,
-            raster_settings.scale_modifier,
-            cov3Ds_precomp,
-            raster_settings.viewmatrix,
-            raster_settings.projmatrix,
-            raster_settings.tanfovx,
-            raster_settings.tanfovy,
-            raster_settings.image_height,
-            raster_settings.image_width,
-            sh,
-            raster_settings.sh_degree,
-            raster_settings.campos,
-            raster_settings.prefiltered,
-            raster_settings.antialiasing,
-            raster_settings.debug
-        )
+        if not jvp:
 
-        # Invoke C++/CUDA rasterizer
-        num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths = _C.rasterize_gaussians(*args)
+            # Restructure arguments the way that the C++ lib expects them
+            args = (
+                raster_settings.bg, 
+                means3D,
+                colors_precomp,
+                opacities,
+                scales,
+                rotations,
+                raster_settings.scale_modifier,
+                cov3Ds_precomp,
+                raster_settings.viewmatrix,
+                raster_settings.projmatrix,
+                raster_settings.tanfovx,
+                raster_settings.tanfovy,
+                raster_settings.image_height,
+                raster_settings.image_width,
+                sh,
+                raster_settings.sh_degree,
+                raster_settings.campos,
+                raster_settings.prefiltered,
+                raster_settings.antialiasing,
+                raster_settings.debug
+            )
+
+            # Invoke C++/CUDA rasterizer
+            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths = _C.rasterize_gaussians(*args)
+
+        else:
+            # Restructure arguments the way that the C++ lib expects them
+            args = (
+                raster_settings.bg, 
+                raster_settings_tangent.bg,
+                means3D,
+                means3D_tangent,
+                colors_precomp,
+                colors_precomp_tangent,
+                opacities,
+                opacities_tangent,
+                scales,
+                scales_tangent,
+                rotations,
+                rotations_tangent,
+                raster_settings.scale_modifier,
+                raster_settings_tangent.scale_modifier,
+                cov3Ds_precomp,
+                cov3Ds_precomp_tangent,
+                raster_settings.viewmatrix,
+                raster_settings_tangent.viewmatrix,
+                raster_settings.projmatrix,
+                raster_settings_tangent.projmatrix,
+                raster_settings.tanfovx,
+                raster_settings_tangent.tanfovx,
+                raster_settings.tanfovy,
+                raster_settings_tangent.tanfovy,
+                raster_settings.image_height,
+                raster_settings.image_width,
+                sh,
+                sh_tangent,
+                raster_settings.sh_degree,
+                raster_settings.campos,
+                raster_settings_tangent.campos,
+                raster_settings.prefiltered,
+                raster_settings.antialiasing,
+                raster_settings.debug
+            )
+
+            # Invoke C++/CUDA rasterizer
+            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths, color_grad, invdepths_grad = _C.rasterize_gaussians_jvp(*args)
+            ctx.save_for_forward(color_grad, invdepths_grad)
+
+            import code; code.interact(local=locals(), banner="after jvp render")
+
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
@@ -136,9 +261,35 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_rotations,
             grad_cov3Ds_precomp,
             None,
+            None, None, None, None, None, None, None, None, None, None
         )
 
         return grads
+
+    @staticmethod
+    def jvp(
+        ctx,
+        grad_means3D,
+        grad_means2D,
+        grad_sh,
+        grad_colors_precomp,
+        grad_opacities,
+        grad_scales,
+        grad_rotations,
+        grad_cov3Ds_precomp,
+        grad_raster_settings,
+        grad_jvp,
+        grad_means3D_tangent,
+        grad_means2D_tangent,
+        grad_sh_tangent,
+        grad_colors_precomp_tangent,
+        grad_opacities_tangent,
+        grad_scales_tangent,
+        grad_rotations_tangent,
+        grad_cov3Ds_precomp_tangent,
+        grad_raster_settings_tangent,):
+        color_grad, invdepths_grad = ctx.saved_tensors
+        return color_grad, None, invdepths_grad
 
 class GaussianRasterizationSettings(NamedTuple):
     image_height: int

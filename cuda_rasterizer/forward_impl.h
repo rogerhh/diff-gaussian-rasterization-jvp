@@ -269,6 +269,46 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
     if (idx >= P)
         return;
 
+    // DEBUG
+    if (idx == 0) {
+        printf("viewmatrix = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", get_data(viewmatrix[i]));
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+        printf("viewmatrix.grad = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", get_grad(viewmatrix[i]));
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+        printf("viewmatrix.grad = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", viewmatrix.grad_ptr()[i]);
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+        printf("projmatrix = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", get_data(projmatrix[i]));
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+        printf("projmatrix.grad = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", get_grad(projmatrix[i]));
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+                
+    }
+
     // Initialize radius and touched tiles to 0. If this isn't changed,
     // this Gaussian will not be processed further.
     radii[idx] = 0;
@@ -307,6 +347,41 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
     // Compute 2D screen-space covariance matrix
     auto cov = computeCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
 
+    // DEBUG
+    if (idx == 0) {
+        int gid = idx;
+        printf("gid = %u, p_orig = (%f, %f, %f), p_orig.grad = (%f, %f, %f), "
+                "focal_x = %f, focal_y = %f, tan_fovx = %f, tan_fovy = %f, "
+                "focal_x.grad = %f, focal_y.grad = %f, tan_fovx.grad = %f, tan_fovy.grad = %f, "
+                "cov3D = (%f, %f, %f, %f, %f, %f), cov3D.grad = (%f, %f, %f, %f, %f, %f)\n",
+                gid, get_data(p_orig.x), get_data(p_orig.y), get_data(p_orig.z),
+                get_grad(p_orig.x), get_grad(p_orig.y), get_grad(p_orig.z),
+                get_data(focal_x), get_data(focal_y), get_data(tan_fovx), get_data(tan_fovy),
+                get_grad(focal_x), get_grad(focal_y), get_grad(tan_fovx), get_grad(tan_fovy),
+                get_data(cov3D[0]), get_data(cov3D[1]), get_data(cov3D[2]),
+                get_data(cov3D[3]), get_data(cov3D[4]), get_data(cov3D[5]),
+                get_grad(cov3D[0]), get_grad(cov3D[1]), get_grad(cov3D[2]),
+                get_grad(cov3D[3]), get_grad(cov3D[4]), get_grad(cov3D[5]));
+        printf("viewmatrix = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", get_data(viewmatrix[i]));
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+        printf("viewmatrix.grad = \n");
+        for (int i = 0; i < 16; i++)
+        {
+            printf("%f ", get_grad(viewmatrix[i]));
+            if ((i + 1) % 4 == 0)
+                printf("\n");
+        }
+        printf("cov = (%f, %f, %f), cov.grad = (%f, %f, %f)\n",
+                get_data(cov.x), get_data(cov.y), get_data(cov.z),
+                get_grad(cov.x), get_grad(cov.y), get_grad(cov.z));
+                
+    }
+
     constexpr float h_var = 0.3f;
     auto det_cov = cov.x * cov.z - cov.y * cov.y;
     cov.x += h_var;
@@ -319,6 +394,14 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
 
     // Invert covariance (EWA algorithm)
     auto det = det_cov_plus_h_cov;
+
+    // DEBUG
+    if (idx == 0) {
+        int gid = idx;
+        printf("gid = %u, det = %f, det.grad = %f, "
+                "cov = (%f, %f, %f), cov.grad = (%f, %f, %f)\n",
+                gid, get_data(det), get_grad(det), get_data(cov.x), get_data(cov.y), get_data(cov.z), get_grad(cov.x), get_grad(cov.y), get_grad(cov.z));
+    }
 
     if (det == 0.0f)
         return;
@@ -411,6 +494,7 @@ renderCUDAJvp(TupleType jvp_args_tuple)
     uint32_t pix_id = W * pix.y + pix.x;
     float2 pixf = { (float)pix.x, (float)pix.y };
 
+
     // Check if this thread is associated with a valid pixel or outside.
     bool inside = pix.x < W&& pix.y < H;
     // Done threads can help with fetching, but don't rasterize
@@ -442,6 +526,21 @@ renderCUDAJvp(TupleType jvp_args_tuple)
     FloatGrad<float> D = 0.0f;
 
     FloatGrad<float> expected_invdepth = 0.0f;
+
+    // // DEBUG
+    // if (pix_id == 0) {
+    //     int gid = 98077;
+    //     printf("pix_id = %u, gid = %u, points_xy_image[%u] = (%f, %f), points_xy_image[%u].grad = (%f, %f), "
+    //             "conic_opacity[%u] = (%f, %f, %f, %f), conic_opacity[%u].grad = (%f, %f, %f, %f)\n",
+    //             pix_id, gid, gid, 
+    //             get_data(points_xy_image[gid].x), get_data(points_xy_image[gid].y),
+    //             gid, get_grad(points_xy_image[gid].x), get_grad(points_xy_image[gid].y),
+    //             gid, get_data(conic_opacity[gid].x), get_data(conic_opacity[gid].y),
+    //             get_data(conic_opacity[gid].z), get_data(conic_opacity[gid].w),
+    //             gid, get_grad(conic_opacity[gid].x), get_grad(conic_opacity[gid].y),
+    //             get_grad(conic_opacity[gid].z), get_grad(conic_opacity[gid].w));
+    //            
+    // }
     
     // Iterate over batches until all done or range is complete
     for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -466,6 +565,13 @@ renderCUDAJvp(TupleType jvp_args_tuple)
         // Iterate over current batch
         for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
         {
+
+            // // DEBUG
+            // if (pix_id == 0) {
+            //     printf("pix_id = %u, coll_id = %u, T = (%f, %f)\n",
+            //             pix_id, collected_id[j], get_data(T), get_grad(T));
+            //            
+            // }
 
             // Keep track of current position in range
             contributor++;

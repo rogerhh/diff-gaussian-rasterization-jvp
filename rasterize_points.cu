@@ -86,6 +86,20 @@ RasterizeGaussiansCUDA(
   std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
   std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
+
+  auto background_contiguous = background.contiguous();
+  auto means3D_contiguous = means3D.contiguous();
+  auto sh_contiguous = sh.contiguous();
+  auto colors_contiguous = colors.contiguous();
+  auto opacity_contiguous = opacity.contiguous();
+  auto scales_contiguous = scales.contiguous();
+  auto rotations_contiguous = rotations.contiguous();
+  auto cov3D_precomp_contiguous = cov3D_precomp.contiguous();
+  auto viewmatrix_contiguous = viewmatrix.contiguous();
+  auto projmatrix_contiguous = projmatrix.contiguous();
+  auto campos_contiguous = campos.contiguous();
+  auto out_color_contiguous = out_color.contiguous();
+  auto radii_contiguous = radii.contiguous();
   
   int rendered = 0;
   if(P != 0)
@@ -101,26 +115,26 @@ RasterizeGaussiansCUDA(
         binningFunc,
         imgFunc,
         P, degree, M,
-        background.contiguous().data<float>(),
+        background_contiguous.data<float>(),
         W, H,
-        means3D.contiguous().data<float>(),
-        sh.contiguous().data_ptr<float>(),
-        colors.contiguous().data<float>(), 
-        opacity.contiguous().data<float>(), 
-        scales.contiguous().data_ptr<float>(),
+        means3D_contiguous.data<float>(),
+        sh_contiguous.data<float>(),
+        colors_contiguous.data<float>(),
+        opacity_contiguous.data<float>(),
+        scales_contiguous.data<float>(),
         scale_modifier,
-        rotations.contiguous().data_ptr<float>(),
-        cov3D_precomp.contiguous().data<float>(), 
-        viewmatrix.contiguous().data<float>(), 
-        projmatrix.contiguous().data<float>(),
-        campos.contiguous().data<float>(),
+        rotations_contiguous.data<float>(),
+        cov3D_precomp_contiguous.data<float>(),
+        viewmatrix_contiguous.data<float>(),
+        projmatrix_contiguous.data<float>(),
+        campos_contiguous.data<float>(),
         tan_fovx,
         tan_fovy,
         prefiltered,
-        out_color.contiguous().data<float>(),
+        out_color_contiguous.data<float>(),
         out_invdepthptr,
         antialiasing,
-        radii.contiguous().data<int>(),
+        radii_contiguous.data<int>(),
         debug);
   }
   return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer, out_invdepth);
@@ -201,21 +215,47 @@ RasterizeGaussiansCUDAJvp(
   std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBufferJvp);
 
-  FloatGradArray<float> background_floatgrad(background.contiguous().data<float>(), background_grad.contiguous().data<float>());
-  FloatGradArray<float> means3D_floatgrad(means3D.contiguous().data<float>(), means3D_grad.contiguous().data<float>());
-  FloatGradArray<float> colors_floatgrad(colors.contiguous().data<float>(), colors_grad.contiguous().data<float>());
-  FloatGradArray<float> opacity_floatgrad(opacity.contiguous().data<float>(), opacity_grad.contiguous().data<float>());
-  FloatGradArray<float> scales_floatgrad(scales.contiguous().data<float>(), scales_grad.contiguous().data<float>());
-  FloatGradArray<float> rotations_floatgrad(rotations.contiguous().data<float>(), rotations_grad.contiguous().data<float>());
+  auto background_contiguous = background.contiguous();
+  auto background_grad_contiguous = background_grad.contiguous();
+  auto means3D_contiguous = means3D.contiguous();
+  auto means3D_grad_contiguous = means3D_grad.contiguous();
+  auto sh_contiguous = sh.contiguous();
+  auto sh_grad_contiguous = sh_grad.contiguous();
+  auto colors_contiguous = colors.contiguous();
+  auto colors_grad_contiguous = colors_grad.contiguous();
+  auto opacity_contiguous = opacity.contiguous();
+  auto opacity_grad_contiguous = opacity_grad.contiguous();
+  auto scales_contiguous = scales.contiguous();
+  auto scales_grad_contiguous = scales_grad.contiguous();
+  auto rotations_contiguous = rotations.contiguous();
+  auto rotations_grad_contiguous = rotations_grad.contiguous();
+  auto cov3D_precomp_contiguous = cov3D_precomp.contiguous();
+  auto cov3D_precomp_grad_contiguous = cov3D_precomp_grad.contiguous();
+  auto viewmatrix_contiguous = viewmatrix.contiguous();
+  auto viewmatrix_grad_contiguous = viewmatrix_grad.contiguous();
+  auto projmatrix_contiguous = projmatrix.contiguous();
+  auto projmatrix_grad_contiguous = projmatrix_grad.contiguous();
+  auto campos_contiguous = campos.contiguous();
+  auto campos_grad_contiguous = campos_grad.contiguous();
+  auto out_color_contiguous = out_color.contiguous();
+  auto out_color_grad_contiguous = out_color_grad.contiguous();
+  auto radii_contiguous = radii.contiguous();
+
+  FloatGradArray<float> background_floatgrad(background_contiguous.data<float>(), background_grad_contiguous.data<float>());
+  FloatGradArray<float> means3D_floatgrad(means3D_contiguous.data<float>(), means3D_grad_contiguous.data<float>());
+  FloatGradArray<float> colors_floatgrad(colors_contiguous.data<float>(), colors_grad_contiguous.data<float>());
+  FloatGradArray<float> opacity_floatgrad(opacity_contiguous.data<float>(), opacity_grad_contiguous.data<float>());
+  FloatGradArray<float> scales_floatgrad(scales_contiguous.data<float>(), scales_grad_contiguous.data<float>());
+  FloatGradArray<float> rotations_floatgrad(rotations_contiguous.data<float>(), rotations_grad_contiguous.data<float>());
   FloatGrad<float> scale_modifier_floatgrad(scale_modifier, scale_modifier_grad);
-  FloatGradArray<float> cov3D_precomp_floatgrad(cov3D_precomp.contiguous().data<float>(), cov3D_precomp_grad.contiguous().data<float>());
-  FloatGradArray<float> viewmatrix_floatgrad(viewmatrix.contiguous().data<float>(), viewmatrix_grad.contiguous().data<float>());
-  FloatGradArray<float> projmatrix_floatgrad(projmatrix.contiguous().data<float>(), projmatrix_grad.contiguous().data<float>());
+  FloatGradArray<float> cov3D_precomp_floatgrad(cov3D_precomp_contiguous.data<float>(), cov3D_precomp_grad_contiguous.data<float>());
+  FloatGradArray<float> viewmatrix_floatgrad(viewmatrix_contiguous.data<float>(), viewmatrix_grad_contiguous.data<float>());
+  FloatGradArray<float> projmatrix_floatgrad(projmatrix_contiguous.data<float>(), projmatrix_grad_contiguous.data<float>());
   FloatGrad<float> tan_fovx_floatgrad(tan_fovx, tan_fovx_grad);
   FloatGrad<float> tan_fovy_floatgrad(tan_fovy, tan_fovy_grad);
-  FloatGradArray<float> sh_floatgrad(sh.contiguous().data<float>(), sh_grad.contiguous().data<float>());
-  FloatGradArray<float> campos_floatgrad(campos.contiguous().data<float>(), campos_grad.contiguous().data<float>());
-  FloatGradArray<float> out_color_floatgrad(out_color.contiguous().data<float>(), out_color_grad.contiguous().data<float>());
+  FloatGradArray<float> sh_floatgrad(sh_contiguous.data<float>(), sh_grad_contiguous.data<float>());
+  FloatGradArray<float> campos_floatgrad(campos_contiguous.data<float>(), campos_grad_contiguous.data<float>());
+  FloatGradArray<float> out_color_floatgrad(out_color_contiguous.data<float>(), out_color_grad_contiguous.data<float>());
   FloatGradArray<float> out_invdepth_floatgrad(out_invdepth_ptr, out_invdepth_grad_ptr);
   
   int rendered = 0;
@@ -251,7 +291,7 @@ RasterizeGaussiansCUDAJvp(
         out_color_floatgrad,
         out_invdepth_floatgrad,
         antialiasing,
-        radii.contiguous().data<int>(),
+        radii_contiguous.data<int>(),
         debug);
   }
   return std::make_tuple(rendered, out_color, radii, geomBufferJvp, binningBuffer, imgBufferJvp, out_invdepth, out_color_grad, out_invdepth_grad);
