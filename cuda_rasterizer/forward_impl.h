@@ -362,17 +362,6 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
 
 
     tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
-
-    // DEBUG
-    if (idx == 20515) {
-        printf("jvp idx %d, points_xy_image %f %f, radii %d, depth %f, conic_opacity %f %f %f %f, tiles_touched %d\n",
-            idx, get_data(points_xy_image[idx].x), get_data(points_xy_image[idx].y),
-            radii[idx], depths[idx],
-            get_data(conic_opacity[idx].x), get_data(conic_opacity[idx].y),
-            get_data(conic_opacity[idx].z), get_data(conic_opacity[idx].w),
-            tiles_touched[idx]);
-
-    }
 }
 
 // Main rasterization method. Collaboratively works on one tile per
@@ -478,23 +467,6 @@ renderCUDAJvp(TupleType jvp_args_tuple)
         // Iterate over current batch
         for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
         {
-            // DEBUG
-            if (pix_id == 0) {
-                int gid = collected_id[j];
-                printf("jvp pix_id = %d, gid = %d, T = %f, color = (%f %f %f)\n",
-                    pix_id, gid, get_data(T),
-                    get_data(C[0]), get_data(C[1]), get_data(C[2]));
-                if (gid == 20515) {
-                    printf("features = (%f %f %f), conic_opacity = (%f %f %f %f)\n",
-                            get_data(features[gid * CHANNELS + 0]),
-                            get_data(features[gid * CHANNELS + 1]),
-                            get_data(features[gid * CHANNELS + 2]),
-                            get_data(collected_conic_opacity[j].x),
-                            get_data(collected_conic_opacity[j].y),
-                            get_data(collected_conic_opacity[j].z),
-                            get_data(collected_conic_opacity[j].w));
-                }
-            }
 
             // Keep track of current position in range
             contributor++;
