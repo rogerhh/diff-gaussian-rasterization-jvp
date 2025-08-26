@@ -92,10 +92,12 @@ __forceinline__ __device__ float3 transformPoint4x3(const float3& p, const float
     return transformed;
 }
 
-template <typename T1, typename T2>
-__forceinline__ __device__ auto transformPoint4x3(const T1& p, const T2 matrix)
+template <typename T1, typename T2,
+          std::enable_if_t<is_float_grad<T1>::value
+                           || is_float_grad<T2>::value, int> = 0>
+__forceinline__ __device__ FloatGrad<float3> transformPoint4x3(const T1& p, const T2 matrix)
 {
-    auto transformed = make_float3(
+    FloatGrad<float3> transformed = make_float3(
         matrix[0] * p.x + matrix[4] * p.y + matrix[8] * p.z + matrix[12],
         matrix[1] * p.x + matrix[5] * p.y + matrix[9] * p.z + matrix[13],
         matrix[2] * p.x + matrix[6] * p.y + matrix[10] * p.z + matrix[14]
@@ -114,10 +116,13 @@ __forceinline__ __device__ float4 transformPoint4x4(const float3& p, const float
     return transformed;
 }
 
-template <typename T1, typename T2>
-__forceinline__ __device__ auto transformPoint4x4(const T1& p, const T2 matrix)
+template <typename T1, typename T2,
+          std::enable_if_t<is_float_grad<T1>::value
+                           || is_float_grad<T2>::value, int> = 0>
+__forceinline__ __device__
+FloatGrad<float4> transformPoint4x4(const T1& p, const T2 matrix)
 {
-    auto transformed = make_float4(
+    FloatGrad<float4> transformed = make_float4(
         matrix[0] * p.x + matrix[4] * p.y + matrix[8] * p.z + matrix[12],
         matrix[1] * p.x + matrix[5] * p.y + matrix[9] * p.z + matrix[13],
         matrix[2] * p.x + matrix[6] * p.y + matrix[10] * p.z + matrix[14],

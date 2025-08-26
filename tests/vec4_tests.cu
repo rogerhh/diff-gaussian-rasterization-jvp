@@ -29,7 +29,19 @@ TEST(FloatGradGlm, Vec4) {
     expect_near(b.y, b1);
     expect_near(b.z, b2);
     expect_near(b.w, b3);
+}
 
+TEST(FloatGradGlm, Vec4Ctor) {
+    FloatGrad<float> b0(5.0f, 1.0f);
+    float b1 = 6.0f;
+    FloatGrad<float> b2(7.0f, 3.0f);
+    float b3 = 8.0f;
+
+    FloatGrad<glm::vec4> b(b0, b1, b2, b3);
+    expect_near(b.x, b0);
+    expect_near(b.y, FloatGrad<float>(b1, 0.0f));
+    expect_near(b.z, b2);
+    expect_near(b.w, FloatGrad<float>(b3, 0.0f));
 }
 
 TEST(FloatGradGlm, Mat3) {

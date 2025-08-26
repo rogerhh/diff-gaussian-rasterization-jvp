@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch
 import torch.autograd.forward_ad as fwAD
 from . import _C
+import time
 
 def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
@@ -47,7 +48,6 @@ def rasterize_gaussians(
     tensor_args = (means3D, means2D, sh, colors_precomp, opacities, scales, rotations, cov3Ds_precomp, raster_settings.bg, raster_settings.viewmatrix, raster_settings.projmatrix, raster_settings.campos)
 
     jvp = any(has_tangent(x) for x in tensor_args)
-    import code; code.interact(local=locals(), banner="after check jvp")
 
     if not jvp:
         return _RasterizeGaussians.apply(
@@ -64,6 +64,7 @@ def rasterize_gaussians(
             None, None, None, None, None, None, None, None, None,
         )
     else:
+
         means3D_tangent = get_tangent(means3D)
         means2D_tangent = get_tangent(means2D)
         sh_tangent = get_tangent(sh)
@@ -86,7 +87,8 @@ def rasterize_gaussians(
                 prefiltered=raster_settings.prefiltered,
                 debug=raster_settings.debug,
                 antialiasing=raster_settings.antialiasing)
-        return _RasterizeGaussians.apply(
+
+        res = _RasterizeGaussians.apply(
             means3D,
             means2D,
             sh,
@@ -106,6 +108,8 @@ def rasterize_gaussians(
             rotations_tangent,
             cov3Ds_precomp_tangent,
             raster_settings_tangent,)
+
+        return res
 
 
 class _RasterizeGaussians(torch.autograd.Function):
@@ -203,15 +207,15 @@ class _RasterizeGaussians(torch.autograd.Function):
 
             # Invoke C++/CUDA rasterizer
             num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths, color_grad, invdepths_grad = _C.rasterize_gaussians_jvp(*args)
-            ctx.save_for_forward(color_grad, invdepths_grad)
 
-            import code; code.interact(local=locals(), banner="after jvp render")
+            ctx.save_for_forward(color_grad, invdepths_grad)
 
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, opacities, geomBuffer, binningBuffer, imgBuffer)
+
         return color, radii, invdepths
 
     @staticmethod
@@ -288,8 +292,10 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_rotations_tangent,
         grad_cov3Ds_precomp_tangent,
         grad_raster_settings_tangent,):
+
         color_grad, invdepths_grad = ctx.saved_tensors
         return color_grad, None, invdepths_grad
+
 
 class GaussianRasterizationSettings(NamedTuple):
     image_height: int

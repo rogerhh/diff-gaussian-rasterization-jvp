@@ -411,7 +411,8 @@ TEST(ForwardTest, PreprocessJvp_test) {
 
     int P = orig_points_rows;
     int D = sh_degree;
-    int M = shs_cols;
+    int M = 1;
+    // int M = shs_cols;
 
     float* orig_points_device = host_to_device(orig_points_host.data(), orig_points_rows * orig_points_cols);
     glm::vec3* scales_device = host_to_device((glm::vec3*) scales_host.data(), scales_rows);

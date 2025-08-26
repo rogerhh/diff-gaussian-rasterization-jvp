@@ -369,6 +369,179 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
+// Testing performance
+template <uint32_t CHANNELS>
+__global__ void __launch_bounds__(CudaRasterizer::BLOCK_X * CudaRasterizer::BLOCK_Y)
+renderCUDAJvp(
+    const uint2* __restrict__ ranges,
+    const uint32_t* __restrict__ point_list,
+    int W, int H,
+    const float2* __restrict__ points_xy_image_data,
+    const float2* __restrict__ points_xy_image_grad,
+    const float* __restrict__ features_data,
+    const float* __restrict__ features_grad,
+    const float4* __restrict__ conic_opacity_data,
+    const float4* __restrict__ conic_opacity_grad,
+    float* __restrict__ final_T_data,
+    float* __restrict__ final_T_grad,
+    uint32_t* __restrict__ n_contrib,
+    const float* __restrict__ bg_color_data,
+    const float* __restrict__ bg_color_grad,
+    float* __restrict__ out_color_data,
+    float* __restrict__ out_color_grad,
+    const float* __restrict__ depths_data,
+    const float* __restrict__ depths_grad,
+    float* __restrict__ invdepth_data,
+    float* __restrict__ invdepth_grad)
+{
+    constexpr int BLOCK_X = CudaRasterizer::BLOCK_X;
+    constexpr int BLOCK_Y = CudaRasterizer::BLOCK_Y;
+    constexpr int BLOCK_SIZE = BLOCK_X * BLOCK_Y;
+
+    // Identify current tile and associated min/max pixel range.
+    auto block = cg::this_thread_block();
+    uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
+    uint2 pix_min = { block.group_index().x * BLOCK_X, block.group_index().y * BLOCK_Y };
+    uint2 pix_max = { min(pix_min.x + BLOCK_X, W), min(pix_min.y + BLOCK_Y , H) };
+    uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
+    uint32_t pix_id = W * pix.y + pix.x;
+    float2 pixf = { (float)pix.x, (float)pix.y };
+
+    // Check if this thread is associated with a valid pixel or outside.
+    bool inside = pix.x < W&& pix.y < H;
+    // Done threads can help with fetching, but don't rasterize
+    bool done = !inside;
+
+    // Load start/end range of IDs to process in bit sorted list.
+    uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
+    const int rounds = ((range.y - range.x + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    int toDo = range.y - range.x;
+
+    // Allocate storage for batches of collectively fetched data.
+    __shared__ int collected_id[BLOCK_SIZE];
+    __shared__ float2 collected_xy_data[BLOCK_SIZE];
+    __shared__ float4 collected_conic_opacity_data[BLOCK_SIZE];
+    __shared__ float2 collected_xy_grad[BLOCK_SIZE];
+    __shared__ float4 collected_conic_opacity_grad[BLOCK_SIZE];
+
+    // Initialize helper variables
+    FloatGrad<float> T = 1.0f;
+    uint32_t contributor = 0;
+    uint32_t last_contributor = 0;
+    float C_data[CHANNELS] = { 0 }, C_grad[CHANNELS] = { 0 };
+    FloatGrad<float> D = 0.0f;
+
+    FloatGrad<float> expected_invdepth = 0.0f;
+
+    // Iterate over batches until all done or range is complete
+    for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
+    {
+
+        // End if entire block votes that it is done rasterizing
+        int num_done = __syncthreads_count(done);
+        if (num_done == BLOCK_SIZE)
+            break;
+
+        // Collectively fetch per-Gaussian data from global to shared
+        int progress = i * BLOCK_SIZE + block.thread_rank();
+        if (range.x + progress < range.y)
+        {
+            int coll_id = point_list[range.x + progress];
+            collected_id[block.thread_rank()] = coll_id;
+            collected_xy_data[block.thread_rank()] = points_xy_image_data[coll_id];
+            collected_xy_grad[block.thread_rank()] = points_xy_image_grad[coll_id];
+            collected_conic_opacity_data[block.thread_rank()] = conic_opacity_data[coll_id];
+            collected_conic_opacity_grad[block.thread_rank()] = conic_opacity_grad[coll_id];
+        }
+        block.sync();
+
+        // Iterate over current batch
+        for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
+        {
+
+            // Keep track of current position in range
+            contributor++;
+
+            // Resample using conic matrix (cf. "Surface 
+            // Splatting" by Zwicker et al., 2001)
+
+            float2 xy_data = collected_xy_data[j]; 
+            float2 xy_grad = collected_xy_grad[j];
+            FloatGrad<float2> xy{xy_data, xy_grad};
+            FloatGrad<float2> d = make_float2(xy.x - pixf.x, xy.y - pixf.y);
+            float4 con_o_data = collected_conic_opacity_data[j];
+            float4 con_o_grad = collected_conic_opacity_grad[j];
+            FloatGrad<float4> con_o{con_o_data, con_o_grad};
+            FloatGrad<float> power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+
+            if (power > 0.0f)
+                continue;
+
+            // Eq. (2) from 3D Gaussian splatting paper.
+            // Obtain alpha by multiplying with Gaussian opacity
+            // and its exponential falloff from mean.
+            // Avoid numerical instabilities (see paper appendix). 
+            FloatGrad<float> alpha = fminf(0.99f, con_o.w * expf(power));
+            if (alpha < 1.0f / 255.0f)
+                continue;
+            FloatGrad<float> test_T = T * (1 - alpha);
+            if (test_T < 0.0001f)
+            {
+                done = true;
+                continue;
+            }
+
+            // Eq. (3) from 3D Gaussian splatting paper.
+            for (int ch = 0; ch < CHANNELS; ch++) {
+                int idx = collected_id[j] * CHANNELS + ch;
+                FloatGrad<float> feature{features_data[idx], features_grad[idx]};
+                FloatGrad<float> C_partial = feature * alpha * T;
+                C_data[ch] += C_partial.data();
+                C_grad[ch] += C_partial.grad();
+            }
+
+            if(invdepth_data != nullptr) {
+                int idx = collected_id[j];
+                FloatGrad<float> depth{depths_data[idx], depths_grad[idx]};
+                expected_invdepth += (1 / depth) * alpha * T;
+            }
+
+            T = test_T;
+
+            // Keep track of last range entry to update this
+            // pixel.
+            last_contributor = contributor;
+        }
+    }
+
+    // All threads that treat valid pixel write out their final
+    // rendering data to the frame and auxiliary buffers.
+    if (inside)
+    {
+        final_T_data[pix_id] = T.data();
+        final_T_grad[pix_id] = T.grad();
+        n_contrib[pix_id] = last_contributor;
+        for (int ch = 0; ch < CHANNELS; ch++) {
+            FloatGrad<float> C_ch{C_data[ch], C_grad[ch]};
+            FloatGrad<float> bg_color_ch{bg_color_data[ch], bg_color_grad[ch]};
+            FloatGrad<float> temp = C_ch + T * bg_color_ch;
+            int idx = ch * H * W + pix_id;
+            out_color_data[idx] = temp.data();
+            out_color_grad[idx] = temp.grad();
+        }
+
+        if (invdepth_data != nullptr) {
+            // 1. / (expected_depth + T * 1e3);
+            invdepth_data[pix_id] = expected_invdepth.data();
+            invdepth_grad[pix_id] = expected_invdepth.grad();
+        }
+    }
+}
+
+/*
+// Main rasterization method. Collaboratively works on one tile per
+// block, each thread treats one pixel. Alternates between fetching 
+// and rasterizing data.
 template <uint32_t CHANNELS, typename TupleType>
 __global__ void __launch_bounds__(CudaRasterizer::BLOCK_X * CudaRasterizer::BLOCK_Y)
 renderCUDAJvp(TupleType jvp_args_tuple)
@@ -428,13 +601,11 @@ renderCUDAJvp(TupleType jvp_args_tuple)
     __shared__ int collected_id[BLOCK_SIZE];
     __shared__ float2 collected_xy_data[BLOCK_SIZE];
     __shared__ float4 collected_conic_opacity_data[BLOCK_SIZE];
-    __shared__ float collected_depth_data[BLOCK_SIZE];
     __shared__ float2 collected_xy_grad[BLOCK_SIZE];
     __shared__ float4 collected_conic_opacity_grad[BLOCK_SIZE];
-    __shared__ float collected_depth_grad[BLOCK_SIZE];
+
     FloatGradArray<float2> collected_xy(collected_xy_data, collected_xy_grad);
     FloatGradArray<float4> collected_conic_opacity(collected_conic_opacity_data, collected_conic_opacity_grad);
-    FloatGradArray<float> collected_depth(collected_depth_data, collected_depth_grad);
 
     // Initialize helper variables
     FloatGrad<float> T = 1.0f;
@@ -475,6 +646,7 @@ renderCUDAJvp(TupleType jvp_args_tuple)
 
             // Resample using conic matrix (cf. "Surface 
             // Splatting" by Zwicker et al., 2001)
+
             FloatGrad<float2> xy = collected_xy[j];
             FloatGrad<float2> d = make_float2(xy.x - pixf.x, xy.y - pixf.y);
             FloatGrad<float4> con_o = collected_conic_opacity[j];
@@ -497,8 +669,9 @@ renderCUDAJvp(TupleType jvp_args_tuple)
             }
 
             // Eq. (3) from 3D Gaussian splatting paper.
-            for (int ch = 0; ch < CHANNELS; ch++)
+            for (int ch = 0; ch < CHANNELS; ch++) {
                 C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+            }
 
             if(invdepth != nullptr)
                 expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
@@ -524,6 +697,7 @@ renderCUDAJvp(TupleType jvp_args_tuple)
             invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
     }
 }
+*/
 
 template <typename... JvpArgs>
 void renderJvp(JvpArgs&&... jvp_args)
@@ -544,10 +718,46 @@ void renderJvp(JvpArgs&&... jvp_args)
     constexpr int NUM_CHANNELS = CudaRasterizer::NUM_CHANNELS;
 
     auto jvp_args_tuple = std::make_tuple(std::forward<JvpArgs>(jvp_args)...);
-    auto grid = std::get<0>(jvp_args_tuple);
-    auto block = std::get<1>(jvp_args_tuple);
+    dim3 grid = std::get<0>(jvp_args_tuple);
+    dim3 block = std::get<1>(jvp_args_tuple);
+    const uint2* ranges = std::get<2>(jvp_args_tuple);
+    const uint32_t* point_list = std::get<3>(jvp_args_tuple);
+    int W = std::get<4>(jvp_args_tuple);
+    int H = std::get<5>(jvp_args_tuple);
+    auto means2D = std::get<6>(jvp_args_tuple);
+    auto colors = std::get<7>(jvp_args_tuple);
+    auto conic_opacity = std::get<8>(jvp_args_tuple);
+    auto final_T = std::get<9>(jvp_args_tuple);
+    uint32_t* n_contrib = std::get<10>(jvp_args_tuple);
+    auto bg_color = std::get<11>(jvp_args_tuple);
+    auto out_color = std::get<12>(jvp_args_tuple);
+    auto depths = std::get<13>(jvp_args_tuple);
+    auto depth = std::get<14>(jvp_args_tuple);
 
-    renderCUDAJvp<NUM_CHANNELS> << <grid, block >> > (jvp_args_tuple);
+    // renderCUDAJvp<NUM_CHANNELS> << <grid, block >> > (jvp_args_tuple);
+
+    renderCUDAJvp<NUM_CHANNELS> << <grid, block >> > (
+            ranges,
+            point_list,
+            W, H,
+            means2D.data_ptr(),
+            means2D.grad_ptr(),
+            colors.data_ptr(),
+            colors.grad_ptr(),
+            conic_opacity.data_ptr(),
+            conic_opacity.grad_ptr(),
+            final_T.data_ptr(),
+            final_T.grad_ptr(),
+            n_contrib,
+            bg_color.data_ptr(),
+            bg_color.grad_ptr(),
+            out_color.data_ptr(),
+            out_color.grad_ptr(),
+            depths.data_ptr(),
+            depths.grad_ptr(),
+            depth.data_ptr(),
+            depth.grad_ptr()
+    );
 }
 
 template <typename... JvpArgs>

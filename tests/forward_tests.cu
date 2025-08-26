@@ -86,6 +86,7 @@ void call_forward_jvp(
         float* cam_pos,
         float tan_fovx, float tan_fovy,
         bool prefiltered,
+        float* background_grad,
         float* viewmatrix_grad,
         float* projmatrix_grad,
         float* cam_pos_grad,
@@ -272,7 +273,7 @@ void call_forward_floatgrad(
         std::function<char* (size_t)> binningBuffer,
         std::function<char* (size_t)> imageBuffer,
         int P, int D, int M,
-        float* background,
+        FloatGradArray<float> background,
         int width, int height,
         float* means3D,
         float* shs,
@@ -339,6 +340,7 @@ TEST(ForwardTest, ForwardJvp_test) {
     std::vector<float> background_host;
     int background_rows, background_cols;
     read_csv("data/bg.csv", background_host, background_rows, background_cols);
+    std::vector<float> background_grad_host(background_host.size(), 0.0f);
 
     std::vector<float> orig_points_host;
     int orig_points_rows, orig_points_cols;
@@ -421,6 +423,7 @@ TEST(ForwardTest, ForwardJvp_test) {
     int M = shs_cols;
 
     float* background_device = host_to_device(background_host.data(), background_rows * background_cols);
+    float* background_grad_device = host_to_device(background_grad_host.data(), background_rows * background_cols);
     float* orig_points_device = host_to_device(orig_points_host.data(), orig_points_rows * orig_points_cols);
     glm::vec3* scales_device = host_to_device((glm::vec3*) scales_host.data(), scales_rows);
     glm::vec4* rotations_device = host_to_device((glm::vec4*) rotations_host.data(), rotations_rows);
@@ -472,6 +475,7 @@ TEST(ForwardTest, ForwardJvp_test) {
         (float*) cam_pos_device,
         tan_fovx, tan_fovy,
         prefiltered,
+        background_grad_device,
         viewmatrix_grad_device,
         projmatrix_grad_device,
         (float*) cam_pos_grad_device,
@@ -515,6 +519,7 @@ TEST(ForwardTest, ForwardJvp_test) {
     assert(colors_precomp_device == nullptr);
     assert(cov3D_precomp_device == nullptr);
 
+    FloatGradArray<float> background_floatgrad(background_device, background_grad_device);
     FloatGradArray<float> colors_precomp_floatgrad(colors_precomp_device, nullptr);
     FloatGradArray<float> cov3D_precomp_floatgrad(cov3D_precomp_device, nullptr);
     FloatGradArray<float> viewmatrix_floatgrad(viewmatrix_device, viewmatrix_grad_device);
@@ -528,7 +533,7 @@ TEST(ForwardTest, ForwardJvp_test) {
         binningFunc,
         imgFunc,
         P, D, M,
-        background_device,
+        background_floatgrad,
         W, H,
         orig_points_device,
         shs_device,
@@ -591,6 +596,7 @@ TEST(ForwardTest, ForwardJvp_test) {
     // printf("Correct color gradients: %d / %d\n", correct_grad_count, total_pixels);
 
     free_device(background_device);
+    free_device(background_grad_device);
     free_device(orig_points_device);
     free_device(scales_device);
     free_device(rotations_device);

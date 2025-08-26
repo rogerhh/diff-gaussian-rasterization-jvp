@@ -82,6 +82,7 @@ void call_render_jvp(
         float* colors_grad,
         float4* conic_opacity_grad,
         float* final_T_grad,        // Output
+        float* bg_color_grad,
         float* out_color_grad,      // Output
         float* depths_grad,
         float* depth_grad,      // Output
@@ -198,7 +199,7 @@ void call_render_floatgrad(
         FloatGradArray<float4> conic_opacity,
         FloatGradArray<float> final_T,             // Output
         uint32_t* n_contrib,
-        float* bg_color,
+        FloatGradArray<float> bg_color,
         FloatGradArray<float> out_color,           // Output 
         FloatGradArray<float> depths,
         FloatGradArray<float> depth           // Output
@@ -265,6 +266,7 @@ TEST(ForwardTest, RenderTests) {
     std::vector<float> bg_color_host;
     int bg_color_rows, bg_color_cols;
     read_csv<float>("render_data/background.csv", bg_color_host, bg_color_rows, bg_color_cols);
+    std::vector<float> bg_color_grad_host(bg_color_host.size(), 0.0f);
 
     std::vector<float> out_color_ref_host(W * H * 3, 0.0f);
     std::vector<float> out_color_grad_ref_host(W * H * 3, 0.0f);
@@ -315,6 +317,7 @@ TEST(ForwardTest, RenderTests) {
     float* final_T_grad_ref_device = host_to_device(final_T_grad_ref_host.data(), W * H);
     uint32_t* n_contrib_ref_device = host_to_device(n_contrib_ref_host.data(), W * H);
     float* bg_color_device = host_to_device(bg_color_host.data(), 3);
+    float* bg_color_grad_device = host_to_device(bg_color_grad_host.data(), 3);
     float* out_color_ref_device = host_to_device(out_color_ref_host.data(), W * H * 3);
     float* out_color_grad_ref_device = host_to_device(out_color_grad_ref_host.data(), W * H * 3);
     float* depths_device = host_to_device(depths_host.data(), P);
@@ -354,6 +357,7 @@ TEST(ForwardTest, RenderTests) {
         colors_grad_device,
         conic_opacity_grad_device,
         final_T_grad_ref_device,        // Output
+        bg_color_grad_device,
         out_color_grad_ref_device,  // Output   
         depths_grad_device,
         depth_grad_ref_device,  // Output   
@@ -374,21 +378,21 @@ TEST(ForwardTest, RenderTests) {
     device_to_host(depth_ref_host.data(), depth_ref_device, W * H);
     device_to_host(depth_grad_ref_host.data(), depth_grad_ref_device, W * H);
 
-    for (int i = 0; i < 10; i++) {
-        std::cout << "Final T[" << i << "]: " << final_T_ref_host[i] << std::endl;
-        std::cout << "Final T Grad[" << i << "]: " << final_T_grad_ref_host[i] << std::endl;
-        std::cout << "Out Color[" << i << "]: ";
-        for (int j = 0; j < 3; j++) {
-            std::cout << out_color_ref_host[i * 3 + j] << " ";
-        }
-        std::cout << std::endl;
-        std::cout << "Out Color Grad[" << i << "]: ";
-        for (int j = 0; j < 3; j++) {
-            std::cout << out_color_grad_ref_host[i * 3 + j] << " ";
-        }
-        std::cout << std::endl;
-        std::cout << std::endl;
-    }
+    // for (int i = 0; i < 10; i++) {
+    //     std::cout << "Final T[" << i << "]: " << final_T_ref_host[i] << std::endl;
+    //     std::cout << "Final T Grad[" << i << "]: " << final_T_grad_ref_host[i] << std::endl;
+    //     std::cout << "Out Color[" << i << "]: ";
+    //     for (int j = 0; j < 3; j++) {
+    //         std::cout << out_color_ref_host[i * 3 + j] << " ";
+    //     }
+    //     std::cout << std::endl;
+    //     std::cout << "Out Color Grad[" << i << "]: ";
+    //     for (int j = 0; j < 3; j++) {
+    //         std::cout << out_color_grad_ref_host[i * 3 + j] << " ";
+    //     }
+    //     std::cout << std::endl;
+    //     std::cout << std::endl;
+    // }
 
     std::vector<float> final_T_host(W * H, 0.0f);
     std::vector<float> final_T_grad_host(W * H, 0.0f);
@@ -410,6 +414,7 @@ TEST(ForwardTest, RenderTests) {
     FloatGradArray<float> colors_floatgrad(colors_device, colors_grad_device);
     FloatGradArray<float4> conic_opacity_floatgrad(conic_opacity_device, conic_opacity_grad_device);
     FloatGradArray<float> final_T_floatgrad(final_T_device, final_T_grad_device);
+    FloatGradArray<float> bg_color_floatgrad(bg_color_device, bg_color_grad_device);
     FloatGradArray<float> out_color_floatgrad(out_color_device, out_color_grad_device);
     FloatGradArray<float> depths_floatgrad(depths_device, depths_grad_device);
     FloatGradArray<float> depth_floatgrad(depth_device, depth_grad_device);
@@ -425,7 +430,7 @@ TEST(ForwardTest, RenderTests) {
             conic_opacity_floatgrad,
             final_T_floatgrad,             // Output
             n_contrib_device,           // Output
-            bg_color_device,
+            bg_color_floatgrad,
             out_color_floatgrad,           // Output
             depths_floatgrad,
             depth_floatgrad           // Output
@@ -441,21 +446,21 @@ TEST(ForwardTest, RenderTests) {
     device_to_host(depth_host.data(), depth_device, W * H);
     device_to_host(depth_grad_host.data(), depth_grad_device, W * H);
 
-    for (int i = 0; i < 10; i++) {
-        std::cout << "Final T[" << i << "]: " << final_T_host[i] << std::endl;
-        std::cout << "Final T Grad[" << i << "]: " << final_T_grad_host[i] << std::endl;
-        std::cout << "Out Color[" << i << "]: ";
-        for (int j = 0; j < 3; j++) {
-            std::cout << out_color_host[i * 3 + j] << " ";
-        }
-        std::cout << std::endl;
-        std::cout << "Out Color Grad[" << i << "]: ";
-        for (int j = 0; j < 3; j++) {
-            std::cout << out_color_grad_host[i * 3 + j] << " ";
-        }
-        std::cout << std::endl;
-        std::cout << std::endl;
-    }
+    // for (int i = 0; i < 10; i++) {
+    //     std::cout << "Final T[" << i << "]: " << final_T_host[i] << std::endl;
+    //     std::cout << "Final T Grad[" << i << "]: " << final_T_grad_host[i] << std::endl;
+    //     std::cout << "Out Color[" << i << "]: ";
+    //     for (int j = 0; j < 3; j++) {
+    //         std::cout << out_color_host[i * 3 + j] << " ";
+    //     }
+    //     std::cout << std::endl;
+    //     std::cout << "Out Color Grad[" << i << "]: ";
+    //     for (int j = 0; j < 3; j++) {
+    //         std::cout << out_color_grad_host[i * 3 + j] << " ";
+    //     }
+    //     std::cout << std::endl;
+    //     std::cout << std::endl;
+    // }
 
 
     free_device(ranges_device);
@@ -470,6 +475,7 @@ TEST(ForwardTest, RenderTests) {
     free_device(final_T_grad_ref_device);
     free_device(n_contrib_ref_device);
     free_device(bg_color_device);
+    free_device(bg_color_grad_device);
     free_device(out_color_ref_device);
     free_device(out_color_grad_ref_device);
     free_device(depth_device);
@@ -487,7 +493,5 @@ TEST(ForwardTest, RenderTests) {
     free_device(final_T_grad_device);
     free_device(out_color_device);
     free_device(out_color_grad_device);
-    free_device(depth_device);
-    free_device(depth_grad_device);
 
 }
