@@ -183,8 +183,9 @@ int Rasterizer::forwardJvp(JvpArgs&&... jvp_args)
     auto focal_x = width / (2.0f * tan_fovx);
 
     size_t chunk_size = required<GeometryStateJvp>(P);
-    char* chunkptr = geometryBuffer(chunk_size);
-    GeometryStateJvp geomState = GeometryStateJvp::fromChunk(chunkptr, P);
+    char* geom_chunkptr = geometryBuffer(chunk_size);
+    char* geom_chunkptr_start = geom_chunkptr;
+    GeometryStateJvp geomState = GeometryStateJvp::fromChunk(geom_chunkptr, P);
 
     if (radii == nullptr)
     {
@@ -201,6 +202,7 @@ int Rasterizer::forwardJvp(JvpArgs&&... jvp_args)
     // Dynamically resize image-based auxiliary buffers during training
     size_t img_chunk_size = required<ImageStateJvp>(width * height);
     char* img_chunkptr = imageBuffer(img_chunk_size);
+    char* img_chunkptr_start = img_chunkptr;
     ImageStateJvp imgState = ImageStateJvp::fromChunk(img_chunkptr, width * height);
 
     if (NUM_CHANNELS != 3 && colors_precomp == nullptr)
@@ -246,6 +248,7 @@ int Rasterizer::forwardJvp(JvpArgs&&... jvp_args)
 
     size_t binning_chunk_size = required<BinningState>(num_rendered);
     char* binning_chunkptr = binningBuffer(binning_chunk_size);
+    char* binning_chunkptr_start = binning_chunkptr;
     BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
 
     // For each instance to be rendered, produce adequate [ tile | depth ] key 
@@ -301,6 +304,22 @@ int Rasterizer::forwardJvp(JvpArgs&&... jvp_args)
         out_color,
         geomState.depths,
         depth), debug)
+
+    // Free up information not used by buffers, including grads
+    char* geom_chunkptr_end = geom_chunkptr_start;
+    GeometryState reduced_geom_state = GeometryState::fromChunk(geom_chunkptr_end, P);
+    size_t final_geom_size = geom_chunkptr_end - geom_chunkptr_start;
+    geometryBuffer(final_geom_size);
+
+    char* image_chunkptr_end = img_chunkptr_start;
+    ImageState reduced_img_state = ImageState::fromChunk(image_chunkptr_end, width * height);
+    size_t final_img_size = image_chunkptr_end - img_chunkptr_start;
+    imageBuffer(final_img_size);
+
+    char* binning_chunkptr_end = binning_chunkptr_start;
+    ReducedBinningState reduced_binning_state = ReducedBinningState::fromChunk(binning_chunkptr_end, num_rendered);
+    size_t final_binning_size = binning_chunkptr_end - binning_chunkptr_start;
+    binningBuffer(final_binning_size);
 
     return num_rendered;
 }

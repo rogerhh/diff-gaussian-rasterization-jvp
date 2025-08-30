@@ -12,27 +12,14 @@
 from typing import NamedTuple
 import torch.nn as nn
 import torch
-import torch.autograd.forward_ad as fwAD
 from . import _C
 import time
+
+from diff_gaussian_rasterization.utils import has_tangent, get_tangent
 
 def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
     return tuple(copied_tensors)
-
-def has_tangent(x):
-    return fwAD.unpack_dual(x).tangent is not None
-
-def get_tangent(x):
-    if isinstance(x, float):
-        return 0.0
-
-    elif has_tangent(x):
-        return fwAD.unpack_dual(x).tangent
-    elif isinstance(x, torch.Tensor):
-        return torch.zeros_like(x)
-    else:
-        raise ValueError(f"Unsupported type for tangent extraction: {type(x)}")
 
 def rasterize_gaussians(
     means3D,

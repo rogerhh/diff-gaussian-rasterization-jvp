@@ -227,6 +227,13 @@ CudaRasterizer::BinningState CudaRasterizer::BinningState::fromChunk(char*& chun
     return binning;
 }
 
+CudaRasterizer::ReducedBinningState CudaRasterizer::ReducedBinningState::fromChunk(char*& chunk, size_t P)
+{
+    ReducedBinningState binning;
+    obtain(chunk, binning.point_list, P, 128);
+    return binning;
+}
+
 // Forward rendering procedure for differentiable rasterization
 // of Gaussians.
 int CudaRasterizer::Rasterizer::forward(
@@ -319,6 +326,8 @@ int CudaRasterizer::Rasterizer::forward(
 
     size_t binning_chunk_size = required<BinningState>(num_rendered);
     char* binning_chunkptr = binningBuffer(binning_chunk_size);
+    char* binning_chunkptr_start = binning_chunkptr;
+
     BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
 
     // For each instance to be rendered, produce adequate [ tile | depth ] key 
@@ -371,6 +380,13 @@ int CudaRasterizer::Rasterizer::forward(
         geomState.depths,
         depth), debug)
 
+    char* binning_chunkptr_end = binning_chunkptr_start;
+
+    ReducedBinningState reduced_binning_state = ReducedBinningState::fromChunk(binning_chunkptr_end, num_rendered);
+
+    size_t final_binning_size = binning_chunkptr_end - binning_chunkptr_start;
+    binningBuffer(final_binning_size);
+
     return num_rendered;
 }
 
@@ -412,7 +428,7 @@ void CudaRasterizer::Rasterizer::backward(
     bool debug)
 {
     GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
-    BinningState binningState = BinningState::fromChunk(binning_buffer, R);
+    ReducedBinningState binningState = ReducedBinningState::fromChunk(binning_buffer, R);
     ImageState imgState = ImageState::fromChunk(img_buffer, width * height);
 
     if (radii == nullptr)

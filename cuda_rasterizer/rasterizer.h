@@ -196,6 +196,12 @@ namespace CudaRasterizer
         static BinningState fromChunk(char*& chunk, size_t P);
     };
 
+    struct ReducedBinningState
+    {
+        uint32_t* point_list;
+        static ReducedBinningState fromChunk(char*& chunk, size_t P);
+    };
+
     template<typename T> 
     size_t required(size_t P);
 };
