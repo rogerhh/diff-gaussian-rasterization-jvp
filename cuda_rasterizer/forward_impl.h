@@ -372,7 +372,7 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
 // Testing performance
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(CudaRasterizer::BLOCK_X * CudaRasterizer::BLOCK_Y)
-renderCUDAJvp(
+renderCUDAJvpSplit(
     const uint2* __restrict__ ranges,
     const uint32_t* __restrict__ point_list,
     int W, int H,
@@ -538,7 +538,6 @@ renderCUDAJvp(
     }
 }
 
-/*
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -604,8 +603,8 @@ renderCUDAJvp(TupleType jvp_args_tuple)
     __shared__ float2 collected_xy_grad[BLOCK_SIZE];
     __shared__ float4 collected_conic_opacity_grad[BLOCK_SIZE];
 
-    FloatGradArray<float2> collected_xy(collected_xy_data, collected_xy_grad);
-    FloatGradArray<float4> collected_conic_opacity(collected_conic_opacity_data, collected_conic_opacity_grad);
+    SharedFloatGradArray<float2> collected_xy(collected_xy_data, collected_xy_grad);
+    SharedFloatGradArray<float4> collected_conic_opacity(collected_conic_opacity_data, collected_conic_opacity_grad);
 
     // Initialize helper variables
     FloatGrad<float> T = 1.0f;
@@ -697,7 +696,6 @@ renderCUDAJvp(TupleType jvp_args_tuple)
             invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);
     }
 }
-*/
 
 template <typename... JvpArgs>
 void renderJvp(JvpArgs&&... jvp_args)
@@ -736,7 +734,7 @@ void renderJvp(JvpArgs&&... jvp_args)
 
     // renderCUDAJvp<NUM_CHANNELS> << <grid, block >> > (jvp_args_tuple);
 
-    renderCUDAJvp<NUM_CHANNELS> << <grid, block >> > (
+    renderCUDAJvpSplit<NUM_CHANNELS> << <grid, block >> > (
             ranges,
             point_list,
             W, H,
