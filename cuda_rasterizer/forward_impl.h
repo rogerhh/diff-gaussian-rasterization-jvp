@@ -317,7 +317,7 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
     FloatGrad<float> h_convolution_scaling = 1.0f;
 
     if(antialiasing)
-        h_convolution_scaling = sqrtf(fmaxf(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
+        h_convolution_scaling = sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
 
     // Invert covariance (EWA algorithm)
     auto det = det_cov_plus_h_cov;
@@ -332,9 +332,9 @@ __global__ void preprocessCUDAJvp(TupleType jvp_args_tuple)
     // of screen-space tiles that this Gaussian overlaps with. Quit if
     // rectangle covers 0 tiles. 
     auto mid = 0.5f * (cov.x + cov.z);
-    auto lambda1 = mid + sqrtf(fmaxf(0.1f, mid * mid - det));
-    auto lambda2 = mid - sqrtf(fmaxf(0.1f, mid * mid - det));
-    auto my_radius = get_data(ceilf(3.f * sqrtf(fmaxf(lambda1, lambda2))));
+    auto lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
+    auto lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
+    auto my_radius = get_data(ceil(3.f * sqrt(max(lambda1, lambda2))));
     auto point_image = make_float2(ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H));
     uint2 rect_min, rect_max;
     getRect(get_data(point_image), get_data(my_radius), rect_min, rect_max, grid);

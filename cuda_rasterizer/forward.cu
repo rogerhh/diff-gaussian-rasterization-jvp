@@ -223,7 +223,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
     float h_convolution_scaling = 1.0f;
 
     if(antialiasing)
-        h_convolution_scaling = sqrtf(fmaxf(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
+        h_convolution_scaling = sqrt(max(0.000025f, det_cov / det_cov_plus_h_cov)); // max for numerical stability
 
     // Invert covariance (EWA algorithm)
     const float det = det_cov_plus_h_cov;
@@ -238,9 +238,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
     // of screen-space tiles that this Gaussian overlaps with. Quit if
     // rectangle covers 0 tiles. 
     float mid = 0.5f * (cov.x + cov.z);
-    float lambda1 = mid + sqrtf(fmaxf(0.1f, mid * mid - det));
-    float lambda2 = mid - sqrtf(fmaxf(0.1f, mid * mid - det));
-    float my_radius = ceil(3.f * sqrtf(fmaxf(lambda1, lambda2)));
+    float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
+    float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
+    float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
     float2 point_image = make_float2(ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H));
     uint2 rect_min, rect_max;
     getRect(point_image, my_radius, rect_min, rect_max, grid);
