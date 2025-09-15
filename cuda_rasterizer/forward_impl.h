@@ -39,10 +39,8 @@ __device__ auto computeColorFromSH(JvpArgs&&... jvp_args)
     using ResultType = std::conditional_t<is_float_grad<decltype(dir)>::value
                                           || is_float_grad<decltype(shs)>::value,
                                           FloatGrad<glm::vec3>, glm::vec3>;
-    auto sh = shs + idx * max_coeffs;
-    // ResultType result = SH_C0 * ResultType(sh[0], sh[1], sh[2]);
-    auto sh1 = cast<glm::vec3>(shs) + idx * max_coeffs;
-    ResultType result = SH_C0 * sh1[0];
+    auto sh = cast<glm::vec3>(shs) + idx * max_coeffs;
+    ResultType result = SH_C0 * sh[0];
 
     if (deg > 0)
     {
