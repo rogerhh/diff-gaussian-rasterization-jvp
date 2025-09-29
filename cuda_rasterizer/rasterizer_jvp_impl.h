@@ -14,6 +14,7 @@
 #include <iostream>
 #include <vector>
 #include "forward.h"
+#include "backward.h"
 #include <cuda_runtime_api.h>
 #include <cstdint>
 #include <tuple>
@@ -305,17 +306,8 @@ int Rasterizer::forwardJvp(JvpArgs&&... jvp_args)
         geomState.depths,
         depth), debug)
 
-    // Free up information not used by buffers, including grads
-    char* geom_chunkptr_end = geom_chunkptr_start;
-    GeometryState reduced_geom_state = GeometryState::fromChunk(geom_chunkptr_end, P);
-    size_t final_geom_size = geom_chunkptr_end - geom_chunkptr_start;
-    geometryBuffer(final_geom_size);
-
-    char* image_chunkptr_end = img_chunkptr_start;
-    ImageState reduced_img_state = ImageState::fromChunk(image_chunkptr_end, width * height);
-    size_t final_img_size = image_chunkptr_end - img_chunkptr_start;
-    imageBuffer(final_img_size);
-
+    // Free up information not used by buffers
+    // We need to keep the grads because they are used in hessian backward
     char* binning_chunkptr_end = binning_chunkptr_start;
     ReducedBinningState reduced_binning_state = ReducedBinningState::fromChunk(binning_chunkptr_end, num_rendered);
     size_t final_binning_size = binning_chunkptr_end - binning_chunkptr_start;
@@ -324,5 +316,155 @@ int Rasterizer::forwardJvp(JvpArgs&&... jvp_args)
     return num_rendered;
 }
 
+// Produce necessary gradients for optimization, corresponding
+// to forward render pass
+template <typename... JvpArgs>
+void Rasterizer::backwardJvp(JvpArgs&&... jvp_args)
+    // const int P, int D, int M, int R,
+    // const float* background,
+    // const int width, int height,
+    // const float* means3D,
+    // const float* shs,
+    // const float* colors_precomp,
+    // const float* opacities,
+    // const float* scales,
+    // const float scale_modifier,
+    // const float* rotations,
+    // const float* cov3D_precomp,
+    // const float* viewmatrix,
+    // const float* projmatrix,
+    // const float* campos,
+    // const float tan_fovx, float tan_fovy,
+    // const int* radii,
+    // char* geom_buffer,
+    // char* binning_buffer,
+    // char* img_buffer,
+    // const float* dL_dpix,
+    // const float* dL_invdepths,
+    // float* dL_dmean2D,
+    // float* dL_dconic,
+    // float* dL_dopacity,
+    // float* dL_dcolor,
+    // float* dL_dinvdepth,
+    // float* dL_dmean3D,
+    // float* dL_dcov3D,
+    // float* dL_dsh,
+    // float* dL_dscale,
+    // float* dL_drot,
+    // bool antialiasing,
+    // bool debug)
+{
+    auto jvp_args_tuple = std::forward_as_tuple(std::forward<JvpArgs>(jvp_args)...);
+    const int P = std::get<0>(jvp_args_tuple);
+    const int D = std::get<1>(jvp_args_tuple);
+    const int M = std::get<2>(jvp_args_tuple);
+    const int R = std::get<3>(jvp_args_tuple);
+    auto background = std::get<4>(jvp_args_tuple);
+    const int width = std::get<5>(jvp_args_tuple);
+    const int height = std::get<6>(jvp_args_tuple);
+    auto means3D = std::get<7>(jvp_args_tuple);
+    auto shs = std::get<8>(jvp_args_tuple);
+    auto colors_precomp = std::get<9>(jvp_args_tuple);
+    auto opacities = std::get<10>(jvp_args_tuple);
+    auto scales = std::get<11>(jvp_args_tuple);
+    auto scale_modifier = std::get<12>(jvp_args_tuple);
+    auto rotations = std::get<13>(jvp_args_tuple);
+    auto cov3D_precomp = std::get<14>(jvp_args_tuple);
+    auto viewmatrix = std::get<15>(jvp_args_tuple);
+    auto projmatrix = std::get<16>(jvp_args_tuple);
+    auto campos = std::get<17>(jvp_args_tuple);
+    auto tan_fovx = std::get<18>(jvp_args_tuple);
+    auto tan_fovy = std::get<19>(jvp_args_tuple);
+    const int* radii = std::get<20>(jvp_args_tuple);
+    char* geom_buffer = std::get<21>(jvp_args_tuple);
+    char* binning_buffer = std::get<22>(jvp_args_tuple);
+    char* img_buffer = std::get<23>(jvp_args_tuple);
+    auto dL_dpix = std::get<24>(jvp_args_tuple);
+    auto dL_invdepths = std::get<25>(jvp_args_tuple);
+    auto dL_dmean2D = std::get<26>(jvp_args_tuple);
+    auto dL_dconic = std::get<27>(jvp_args_tuple);
+    auto dL_dopacity = std::get<28>(jvp_args_tuple);
+    auto dL_dcolor = std::get<29>(jvp_args_tuple);
+    auto dL_dinvdepth = std::get<30>(jvp_args_tuple);
+    auto dL_dmean3D = std::get<31>(jvp_args_tuple);
+    auto dL_dcov3D = std::get<32>(jvp_args_tuple);
+    auto dL_dsh = std::get<33>(jvp_args_tuple);
+    auto dL_dscale = std::get<34>(jvp_args_tuple);
+    auto dL_drot = std::get<35>(jvp_args_tuple);
+    bool antialiasing = std::get<36>(jvp_args_tuple);
+    bool debug = std::get<37>(jvp_args_tuple);
+
+    GeometryStateJvp geomState = GeometryStateJvp::fromChunk(geom_buffer, P);
+    ReducedBinningState binningState = ReducedBinningState::fromChunk(binning_buffer, R);
+    ImageStateJvp imgState = ImageStateJvp::fromChunk(img_buffer, width * height);
+
+    if (radii == nullptr)
+    {
+        radii = geomState.internal_radii;
+    }
+
+    auto focal_y = height / (2.0f * tan_fovy);
+    auto focal_x = width / (2.0f * tan_fovx);
+
+    const dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
+    const dim3 block(BLOCK_X, BLOCK_Y, 1);
+
+    // Compute loss gradients w.r.t. 2D mean position, conic matrix,
+    // opacity and RGB of Gaussians from per-pixel loss gradients.
+    // If we were given precomputed colors and not SHs, use them.
+    auto color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
+
+    CHECK_CUDA(BACKWARD::renderJvp(
+        tile_grid,
+        block,
+        imgState.ranges,
+        binningState.point_list,
+        width, height,
+        background,
+        geomState.means2D,
+        geomState.conic_opacity,
+        color_ptr,
+        geomState.depths,
+        imgState.accum_alpha,
+        imgState.n_contrib,
+        dL_dpix,
+        dL_invdepths,
+        cast<float3>(dL_dmean2D),
+        cast<float4>(dL_dconic),
+        dL_dopacity,
+        dL_dcolor,
+        dL_dinvdepth), debug);
+
+    // Take care of the rest of preprocessing. Was the precomputed covariance
+    // given to us or a scales/rot pair? If precomputed, pass that. If not,
+    // use the one we computed ourselves.
+    auto cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
+    CHECK_CUDA(BACKWARD::preprocessJvp(P, D, M,
+        cast<float3>(means3D),
+        radii,
+        shs,
+        geomState.clamped,
+        opacities,
+        cast<glm::vec3>(scales),
+        cast<glm::vec4>(rotations),
+        scale_modifier,
+        cov3D_ptr,
+        viewmatrix,
+        projmatrix,
+        focal_x, focal_y,
+        tan_fovx, tan_fovy,
+        cast<glm::vec3>(campos),
+        cast<float3>(dL_dmean2D),
+        dL_dconic,
+        dL_dinvdepth,
+        dL_dopacity,
+        cast<glm::vec3>(dL_dmean3D),
+        dL_dcolor,
+        dL_dcov3D,
+        dL_dsh,
+        cast<glm::vec3>(dL_dscale),
+        cast<glm::vec4>(dL_drot),
+        antialiasing), debug);
+}
 
 };  // namespace CudaRasterizer

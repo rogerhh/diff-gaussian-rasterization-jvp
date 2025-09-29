@@ -30,6 +30,9 @@ void read_csv(const std::string& filepath,
             else if constexpr (std::is_same<T, int>::value) {
                 data.push_back(std::stoi(value));
             }
+            else if constexpr (std::is_same<T, char>::value) {
+                data.push_back(value[0]);
+            }
             else {
                 static_assert(always_false<T>::value, "Unsupported type for CSV reading");
             }

@@ -17,10 +17,6 @@ import time
 
 from diff_gaussian_rasterization.utils import has_tangent, get_tangent
 
-def cpu_deep_copy_tuple(input_tuple):
-    copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
-    return tuple(copied_tensors)
-
 def rasterize_gaussians(
     means3D,
     means2D,

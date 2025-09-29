@@ -151,11 +151,38 @@ __forceinline__ __device__ float3 transformVec4x3Transpose(const float3& p, cons
     return transformed;
 }
 
+template <typename T1, typename T2,
+          std::enable_if_t<is_float_grad<T1>::value
+                           || is_float_grad<T2>::value, int> = 0>
+__forceinline__ __device__ FloatGrad<float3> transformVec4x3Transpose(const T1& p, const T2 matrix)
+{
+    FloatGrad<float3> transformed = make_float3(
+        matrix[0] * p.x + matrix[1] * p.y + matrix[2] * p.z,
+        matrix[4] * p.x + matrix[5] * p.y + matrix[6] * p.z,
+        matrix[8] * p.x + matrix[9] * p.y + matrix[10] * p.z
+        );
+    return transformed;
+}
+
 __forceinline__ __device__ float dnormvdz(float3 v, float3 dv)
 {
     float sum2 = v.x * v.x + v.y * v.y + v.z * v.z;
     float invsum32 = 1.0f / sqrt(sum2 * sum2 * sum2);
     float dnormvdz = (-v.x * v.z * dv.x - v.y * v.z * dv.y + (sum2 - v.z * v.z) * dv.z) * invsum32;
+    return dnormvdz;
+}
+
+template <typename T1, typename T2,
+          std::enable_if_t<(is_float_grad<T1>::value
+                           || is_float_grad<T2>::value)
+                           && is_float3_type<T1>::value
+                           && is_float3_type<T2>::value, 
+                           int> = 0>
+__forceinline__ __device__ FloatGrad<float> dnormvdz(T1 v, T2 dv)
+{
+    auto sum2 = v.x * v.x + v.y * v.y + v.z * v.z;
+    auto invsum32 = 1.0f / sqrt(sum2 * sum2 * sum2);
+    auto dnormvdz = (-v.x * v.z * dv.x - v.y * v.z * dv.y + (sum2 - v.z * v.z) * dv.z) * invsum32;
     return dnormvdz;
 }
 
@@ -171,6 +198,24 @@ __forceinline__ __device__ float3 dnormvdv(float3 v, float3 dv)
     return dnormvdv;
 }
 
+template <typename T1, typename T2,
+          std::enable_if_t<(is_float_grad<T1>::value
+                           || is_float_grad<T2>::value)
+                           && is_float3_type<T1>::value
+                           && is_float3_type<T2>::value, 
+                           int> = 0>
+__forceinline__ __device__ FloatGrad<float3> dnormvdv(T1 v, T2 dv)
+{
+    auto sum2 = v.x * v.x + v.y * v.y + v.z * v.z;
+    auto invsum32 = 1.0f / sqrt(sum2 * sum2 * sum2);
+
+    FloatGrad<float3> dnormvdv;
+    dnormvdv.x = ((+sum2 - v.x * v.x) * dv.x - v.y * v.x * dv.y - v.z * v.x * dv.z) * invsum32;
+    dnormvdv.y = (-v.x * v.y * dv.x + (sum2 - v.y * v.y) * dv.y - v.z * v.y * dv.z) * invsum32;
+    dnormvdv.z = (-v.x * v.z * dv.x - v.y * v.z * dv.y + (sum2 - v.z * v.z) * dv.z) * invsum32;
+    return dnormvdv;
+}
+
 __forceinline__ __device__ float4 dnormvdv(float4 v, float4 dv)
 {
     float sum2 = v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w;
@@ -179,6 +224,27 @@ __forceinline__ __device__ float4 dnormvdv(float4 v, float4 dv)
     float4 vdv = { v.x * dv.x, v.y * dv.y, v.z * dv.z, v.w * dv.w };
     float vdv_sum = vdv.x + vdv.y + vdv.z + vdv.w;
     float4 dnormvdv;
+    dnormvdv.x = ((sum2 - v.x * v.x) * dv.x - v.x * (vdv_sum - vdv.x)) * invsum32;
+    dnormvdv.y = ((sum2 - v.y * v.y) * dv.y - v.y * (vdv_sum - vdv.y)) * invsum32;
+    dnormvdv.z = ((sum2 - v.z * v.z) * dv.z - v.z * (vdv_sum - vdv.z)) * invsum32;
+    dnormvdv.w = ((sum2 - v.w * v.w) * dv.w - v.w * (vdv_sum - vdv.w)) * invsum32;
+    return dnormvdv;
+}
+
+template <typename T1, typename T2,
+          std::enable_if_t<(is_float_grad<T1>::value
+                           || is_float_grad<T2>::value)
+                           && is_float4_type<T1>::value
+                           && is_float4_type<T2>::value, 
+                           int> = 0>
+__forceinline__ __device__ FloatGrad<float4> dnormvdv(T1 v, T2 dv)
+{
+    auto sum2 = v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w;
+    auto invsum32 = 1.0f / sqrt(sum2 * sum2 * sum2);
+
+    auto vdv = make_float4( v.x * dv.x, v.y * dv.y, v.z * dv.z, v.w * dv.w );
+    auto vdv_sum = vdv.x + vdv.y + vdv.z + vdv.w;
+    FloatGrad<float4> dnormvdv;
     dnormvdv.x = ((sum2 - v.x * v.x) * dv.x - v.x * (vdv_sum - vdv.x)) * invsum32;
     dnormvdv.y = ((sum2 - v.y * v.y) * dv.y - v.y * (vdv_sum - vdv.y)) * invsum32;
     dnormvdv.z = ((sum2 - v.z * v.z) * dv.z - v.z * (vdv_sum - vdv.z)) * invsum32;
