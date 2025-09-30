@@ -19,3 +19,22 @@ def get_tangent(x):
         return torch.zeros_like(x)
     else:
         raise ValueError(f"Unsupported type for tangent extraction: {type(x)}")
+
+def get_primal(x):
+    if has_tangent(x):
+        return fwAD.unpack_dual(x).primal
+    else:
+        return x
+
+def unpack_dual(x):
+    if isinstance(x, float):
+        return x, 0.0
+    elif isinstance(x, list):
+        return [get_primal(xi) for xi in x], [get_tangent(xi) for xi in x]
+    elif has_tangent(x):
+        dual = fwAD.unpack_dual(x)
+        return dual.primal, dual.tangent
+    elif isinstance(x, torch.Tensor):
+        return x, torch.zeros_like(x)
+    else:
+        raise ValueError(f"Unsupported type for dual unpacking: {type(x)}")
