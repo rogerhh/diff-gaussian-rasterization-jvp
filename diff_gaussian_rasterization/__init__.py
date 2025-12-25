@@ -69,7 +69,8 @@ def rasterize_gaussians(
                 campos=get_tangent(raster_settings.campos),
                 prefiltered=raster_settings.prefiltered,
                 debug=raster_settings.debug,
-                antialiasing=raster_settings.antialiasing)
+                antialiasing=raster_settings.antialiasing,
+                track_weights=raster_settings.track_weights,)
 
         res = _RasterizeGaussians.apply(
             means3D,
@@ -120,6 +121,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         raster_settings_tangent,
     ):
 
+        assert not (jvp and raster_settings.track_weights), "JVP mode not supported with track_weights=True"
+
         if not jvp:
 
             # Restructure arguments the way that the C++ lib expects them
@@ -143,11 +146,12 @@ class _RasterizeGaussians(torch.autograd.Function):
                 raster_settings.campos,
                 raster_settings.prefiltered,
                 raster_settings.antialiasing,
-                raster_settings.debug
+                raster_settings.debug,
+                raster_settings.track_weights,
             )
 
             # Invoke C++/CUDA rasterizer
-            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths = _C.rasterize_gaussians(*args)
+            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths, squared_weights = _C.rasterize_gaussians(*args)
 
         else:
             # Restructure arguments the way that the C++ lib expects them
@@ -190,6 +194,7 @@ class _RasterizeGaussians(torch.autograd.Function):
 
             # Invoke C++/CUDA rasterizer
             num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths, color_grad, invdepths_grad = _C.rasterize_gaussians_jvp(*args)
+            squared_weights = None
 
             ctx.save_for_forward(color_grad, invdepths_grad)
 
@@ -199,10 +204,10 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx.num_rendered = num_rendered
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, opacities, geomBuffer, binningBuffer, imgBuffer)
 
-        return color, radii, invdepths
+        return color, radii, invdepths, squared_weights
 
     @staticmethod
-    def backward(ctx, grad_out_color, _, grad_out_depth):
+    def backward(ctx, grad_out_color, _grad_radii, grad_out_depth, _grad_squared_weights):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
@@ -294,6 +299,7 @@ class GaussianRasterizationSettings(NamedTuple):
     prefiltered : bool
     debug : bool
     antialiasing : bool
+    track_weights: bool = False
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):

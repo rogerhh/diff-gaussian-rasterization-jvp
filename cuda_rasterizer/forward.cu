@@ -272,6 +272,35 @@ __global__ void preprocessCUDA(int P, int D, int M,
     tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
 
+__inline__ __device__ float warpReduceSum(float val) {
+    for (int offset = 16; offset > 0; offset /= 2)
+        val += __shfl_down_sync(0xffffffff, val, offset);
+    return val;
+}
+
+__device__ float blockReduceSum(float val) {
+    __shared__ float shared[32]; // Shared mem for 32 partial sums
+    int lane = threadIdx.x % 32;
+    int wid = threadIdx.x / 32;
+
+    // val = warpReduceSum(val);     // Each warp performs partial reduction
+    
+    return 0.1f;
+
+    // if (lane == 0)
+    //     shared[wid] = val;         // Write reduced value to shared memory
+
+    // __syncthreads();              // Wait for all partial reductions
+
+    // // Read from shared memory only if that warp existed
+    // val = (threadIdx.x < blockDim.x / 32) ? shared[lane] : 0.0f;
+
+    // if (wid == 0)
+    //     val = warpReduceSum(val); // Final reduce within first warp
+
+    // return val;
+}
+
 // Main rasterization method. Collaboratively works on one tile per
 // block, each thread treats one pixel. Alternates between fetching 
 // and rasterizing data.
@@ -289,7 +318,9 @@ renderCUDA(
     const float* __restrict__ bg_color,
     float* __restrict__ out_color,
     const float* __restrict__ depths,
-    float* __restrict__ invdepth)
+    float* __restrict__ invdepth,
+    bool track_weights,
+    float* __restrict__ squared_weights)
 {
     // Identify current tile and associated min/max pixel range.
     auto block = cg::this_thread_block();
@@ -299,6 +330,10 @@ renderCUDA(
     uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
     uint32_t pix_id = W * pix.y + pix.x;
     float2 pixf = { (float)pix.x, (float)pix.y };
+
+    const int num_warps = BLOCK_SIZE / 32;
+    int warp_id = block.thread_rank() / 32;
+    int lane_id = block.thread_rank() % 32;
 
     // Check if this thread is associated with a valid pixel or outside.
     bool inside = pix.x < W&& pix.y < H;
@@ -314,6 +349,7 @@ renderCUDA(
     __shared__ int collected_id[BLOCK_SIZE];
     __shared__ float2 collected_xy[BLOCK_SIZE];
     __shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+    __shared__ float collected_squared_weights[num_warps];
 
     // Initialize helper variables
     float T = 1.0f;
@@ -355,35 +391,67 @@ renderCUDA(
             float2 d = { xy.x - pixf.x, xy.y - pixf.y };
             float4 con_o = collected_conic_opacity[j];
             float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+            bool skip_flag = false;
             if (power > 0.0f)
-                continue;
+                skip_flag = true;
 
             // Eq. (2) from 3D Gaussian splatting paper.
             // Obtain alpha by multiplying with Gaussian opacity
             // and its exponential falloff from mean.
             // Avoid numerical instabilities (see paper appendix). 
             float alpha = fminf(0.99f, con_o.w * expf(power));
+
+            // // DEBUG
+            // if (pix.x == 10 && pix.y == 10)
+            // {
+            //     printf("pix = (%d, %d), gid = %d, alpha = %f, T = %f\n", 
+            //             pix.x, pix.y,
+            //             collected_id[j], alpha, T);
+            // }
+
             if (alpha < 1.0f / 255.0f)
-                continue;
+                skip_flag = true;
             float test_T = T * (1 - alpha);
             if (test_T < 0.0001f)
             {
                 done = true;
-                continue;
+                skip_flag = true;
             }
 
-            // Eq. (3) from 3D Gaussian splatting paper.
-            for (int ch = 0; ch < CHANNELS; ch++)
-                C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
+            float weight = 0.0f;
+            if(!skip_flag)
+            {
+                // Eq. (3) from 3D Gaussian splatting paper.
+                for (int ch = 0; ch < CHANNELS; ch++)
+                    C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 
-            if(invdepth)
-            expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
+                if(invdepth)
+                expected_invdepth += (1 / depths[collected_id[j]]) * alpha * T;
 
-            T = test_T;
+                T = test_T;
 
-            // Keep track of last range entry to update this
-            // pixel.
-            last_contributor = contributor;
+                // Keep track of last range entry to update this
+                // pixel.
+                last_contributor = contributor;
+
+                weight = (alpha * T);
+                weight = weight * weight;
+            }
+            else
+            {
+                weight = 0.0f;
+            }
+
+
+            // Track squared weights if needed
+            if(track_weights)
+            {
+                // float block_weight = blockReduceSum(weight);
+                // if(block.thread_rank() == 0) {
+                //     atomicAdd(&squared_weights[collected_id[j]], block_weight);
+                // }
+                atomicAdd(&squared_weights[collected_id[j]], weight);
+            }
         }
     }
 
@@ -414,7 +482,9 @@ void FORWARD::render(
     const float* bg_color,
     float* out_color,
     float* depths,
-    float* depth)
+    float* depth,
+    bool track_weights,
+    float* squared_weights)
 {
     renderCUDA<CudaRasterizer::NUM_CHANNELS> << <grid, block >> > (
         ranges,
@@ -428,8 +498,12 @@ void FORWARD::render(
         bg_color,
         out_color,
         depths, 
-        depth);
+        depth,
+        track_weights,
+        squared_weights);
 }
+
+
 
 void FORWARD::preprocess(int P, int D, int M,
     const float* means3D,

@@ -54,7 +54,9 @@ namespace CudaRasterizer
             float* depth,
             bool antialiasing,
             int* radii = nullptr,
-            bool debug = false);
+            bool debug = false,
+            bool track_weights = false,
+            float* weights = nullptr);
 
         static int testfunc() { return 0; }
 
@@ -112,6 +114,39 @@ namespace CudaRasterizer
             float* dL_dopacity,
             float* dL_dcolor,
             float* dL_dinvdepth,
+            float* dL_dmean3D,
+            float* dL_dcov3D,
+            float* dL_dsh,
+            float* dL_dscale,
+            float* dL_drot,
+            bool antialiasing,
+            bool debug);
+
+        static void preprocessBackward(
+            const int P, int D, int M, int R,
+            const float* background,
+            const int width, int height,
+            const float* means3D,
+            const float* shs,
+            const float* colors_precomp,
+            const float* opacities,
+            const float* scales,
+            const float scale_modifier,
+            const float* rotations,
+            const float* cov3D_precomp,
+            const float* viewmatrix,
+            const float* projmatrix,
+            const float* campos,
+            const float tan_fovx, float tan_fovy,
+            const int* radii,
+            char* geom_buffer,
+            char* binning_buffer,
+            char* img_buffer,
+            const float* dL_dmean2D,
+            const float* dL_dconic,
+            const float* dL_dinvdepth,
+            float* dL_dcolor,
+            float* dL_dopacity,
             float* dL_dmean3D,
             float* dL_dcov3D,
             float* dL_dsh,

@@ -60,7 +60,8 @@ def batch_rasterize_gaussians(
                 camposes=get_tangent(batch_raster_settings.camposes),
                 prefiltered=batch_raster_settings.prefiltered,
                 debug=batch_raster_settings.debug,
-                antialiasing=batch_raster_settings.antialiasing)
+                antialiasing=batch_raster_settings.antialiasing,
+                track_weights=batch_raster_settings.track_weights,)
 
         res = _BatchRasterizeGaussians.apply(
             means3D,
@@ -159,6 +160,25 @@ class _BatchRasterizeGaussians(torch.autograd.Function):
         imgBuffers = None
         invdepthss = torch.zeros((B, 1, max_height, max_width), device=means3D.device, dtype=means3D.dtype)
 
+        assert not (batch_raster_settings.track_weights and jvp), "Tracking weights is not supported in JVP mode."
+
+        if batch_raster_settings.track_weights:
+            squared_weightss = {"means3D": torch.zeros_like(means3D), 
+                                "sh": torch.zeros_like(sh),
+                                "opacities": torch.zeros_like(opacities),
+                                "scales": torch.zeros_like(scales),
+                                "rotations": torch.zeros_like(rotations)}
+
+            # Run one partial backward pass for weight tracking
+            NUM_CHANNELS = 3
+            grad_out_means2D = torch.ones((P, 3), device=means3D.device, dtype=means3D.dtype)
+            grad_out_conic = torch.ones((P, 2, 2), device=means3D.device, dtype=means3D.dtype)
+            grad_out_invdepth = torch.ones((P, 1), device=means3D.device, dtype=means3D.dtype)
+            grad_out_colors = torch.ones((P, NUM_CHANNELS), device=means3D.device, dtype=means3D.dtype)
+
+        else:
+            squared_weightss = None
+
         if not jvp:
 
             for i in range(B):
@@ -183,11 +203,12 @@ class _BatchRasterizeGaussians(torch.autograd.Function):
                     batch_raster_settings.camposes[i],
                     batch_raster_settings.prefiltered,
                     batch_raster_settings.antialiasing,
-                    batch_raster_settings.debug
+                    batch_raster_settings.debug,
+                    batch_raster_settings.track_weights
                 )
 
                 # Invoke C++/CUDA rasterizer
-                num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths = _C.rasterize_gaussians(*args)
+                num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, invdepths, squared_weights = _C.rasterize_gaussians(*args)
 
                 num_rendereds.append(num_rendered)
                 colors[i] = color
@@ -201,7 +222,49 @@ class _BatchRasterizeGaussians(torch.autograd.Function):
                 imgBuffers[i, :imgBuffer.numel()] = imgBuffer
                 binningBufferManager.store_buffer(binningBuffer, i)
 
-                del color, radii, invdepths, geomBuffer, imgBuffer, binningBuffer
+                if batch_raster_settings.track_weights:
+
+                    # DEBUG: If tracking weights, only run backward preprocessing
+                    # Restructure args as C++ method expects them
+                    args = (batch_raster_settings.bg,
+                            means3D, 
+                            radiis[i], 
+                            colors_precomp, 
+                            opacities,
+                            scales, 
+                            rotations, 
+                            batch_raster_settings.scale_modifier, 
+                            cov3Ds_precomp, 
+                            batch_raster_settings.viewmatrices[i], 
+                            batch_raster_settings.projmatrices[i], 
+                            batch_raster_settings.tanfovxs[i], 
+                            batch_raster_settings.tanfovys[i], 
+                            batch_raster_settings.image_heights[i],
+                            batch_raster_settings.image_widths[i],
+                            grad_out_means2D,
+                            grad_out_conic,
+                            grad_out_invdepth,
+                            grad_out_colors,
+                            sh, 
+                            batch_raster_settings.sh_degree, 
+                            batch_raster_settings.camposes[i],
+                            geomBuffers[i],
+                            num_rendereds[i],
+                            binningBuffer,
+                            imgBuffers[i],
+                            batch_raster_settings.antialiasing,
+                            batch_raster_settings.debug,)
+
+                    grad_opacities_i, grad_means3D_i, grad_cov3Ds_precomp_i, grad_sh_i, grad_scales_i, grad_rotations_i = _C.preprocess_backward(*args)        
+
+                    squared_weightss["means3D"] += squared_weights[:,None] * (grad_means3D_i ** 2)
+                    squared_weightss["sh"] += squared_weights[:,None,None] * (grad_sh_i ** 2)
+                    squared_weightss["opacities"] += opacities ** 2     # TODO: find a better approximation for this
+                    squared_weightss["scales"] += squared_weights[:,None] * (grad_scales_i ** 2)
+                    squared_weightss["rotations"] += squared_weights[:,None] * (grad_rotations_i ** 2)
+
+
+                del color, radii, invdepths, geomBuffer, imgBuffer, binningBuffer, squared_weights
                 torch.cuda.empty_cache()
 
         else:
@@ -275,10 +338,10 @@ class _BatchRasterizeGaussians(torch.autograd.Function):
         ctx.binning_buffer_offsets = binningBufferManager.offset_list
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radiis, sh, opacities, geomBuffers, binningBufferManager.binningBuffers, imgBuffers)
 
-        return colors, radiis, invdepthss
+        return colors, radiis, invdepthss, squared_weightss
 
     @staticmethod
-    def backward(ctx, grad_out_color, _, grad_out_depth):
+    def backward(ctx, grad_out_color, _grad_radiis, grad_out_depth, _grad_squared_weights):
 
         # Restore necessary values from context
         num_rendereds = ctx.num_rendereds
@@ -323,10 +386,11 @@ class _BatchRasterizeGaussians(torch.autograd.Function):
                     binningBuffers[binning_buffer_offsets[i]:binning_buffer_offsets[i+1]],
                     imgBuffers[i],
                     batch_raster_settings.antialiasing,
-                    batch_raster_settings.debug)
+                    batch_raster_settings.debug,)
 
             # Compute gradients for relevant tensors by invoking backward method
             grad_means2D_i, grad_colors_precomp_i, grad_opacities_i, grad_means3D_i, grad_cov3Ds_precomp_i, grad_sh_i, grad_scales_i, grad_rotations_i = _C.rasterize_gaussians_backward(*args)        
+
             grad_means3D += grad_means3D_i
             if grad_means2D is None:
                 grad_means2D = grad_means2D_i
@@ -387,7 +451,7 @@ class _BatchRasterizeGaussians(torch.autograd.Function):
         grad_batch_raster_settings_tangent,):
 
         colors_grad, invdepthss_grad = ctx.saved_tensors
-        return colors_grad, None, invdepthss_grad
+        return colors_grad, None, invdepthss_grad, None
 
 
 class BatchGaussianRasterizationSettings(NamedTuple):
@@ -405,6 +469,7 @@ class BatchGaussianRasterizationSettings(NamedTuple):
     prefiltered : bool
     debug : bool
     antialiasing : bool
+    track_weights : bool = False
 
 class BatchGaussianRasterizer(nn.Module):
     def __init__(self, batch_raster_settings):

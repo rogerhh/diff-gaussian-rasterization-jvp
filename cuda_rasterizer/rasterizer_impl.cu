@@ -260,7 +260,9 @@ int CudaRasterizer::Rasterizer::forward(
     float* depth,
     bool antialiasing,
     int* radii,
-    bool debug)
+    bool debug,
+    bool track_weights,
+    float* squared_weights)
 {
     const float focal_y = height / (2.0f * tan_fovy);
     const float focal_x = width / (2.0f * tan_fovx);
@@ -378,7 +380,9 @@ int CudaRasterizer::Rasterizer::forward(
         background,
         out_color,
         geomState.depths,
-        depth), debug)
+        depth,
+        track_weights,
+        squared_weights), debug)
 
     char* binning_chunkptr_end = binning_chunkptr_start;
 
@@ -466,6 +470,84 @@ void CudaRasterizer::Rasterizer::backward(
         dL_dopacity,
         dL_dcolor,
         dL_dinvdepth), debug);
+
+    // Take care of the rest of preprocessing. Was the precomputed covariance
+    // given to us or a scales/rot pair? If precomputed, pass that. If not,
+    // use the one we computed ourselves.
+    const float* cov3D_ptr = (cov3D_precomp != nullptr) ? cov3D_precomp : geomState.cov3D;
+    CHECK_CUDA(BACKWARD::preprocess(P, D, M,
+        (float3*)means3D,
+        radii,
+        shs,
+        geomState.clamped,
+        opacities,
+        (glm::vec3*)scales,
+        (glm::vec4*)rotations,
+        scale_modifier,
+        cov3D_ptr,
+        viewmatrix,
+        projmatrix,
+        focal_x, focal_y,
+        tan_fovx, tan_fovy,
+        (glm::vec3*)campos,
+        (float3*)dL_dmean2D,
+        dL_dconic,
+        dL_dinvdepth,
+        dL_dopacity,
+        (glm::vec3*)dL_dmean3D,
+        dL_dcolor,
+        dL_dcov3D,
+        dL_dsh,
+        (glm::vec3*)dL_dscale,
+        (glm::vec4*)dL_drot,
+        antialiasing), debug);
+}
+
+// Produce necessary gradients for optimization, corresponding
+// to forward render pass
+void CudaRasterizer::Rasterizer::preprocessBackward(
+    const int P, int D, int M, int R,
+    const float* background,
+    const int width, int height,
+    const float* means3D,
+    const float* shs,
+    const float* colors_precomp,
+    const float* opacities,
+    const float* scales,
+    const float scale_modifier,
+    const float* rotations,
+    const float* cov3D_precomp,
+    const float* viewmatrix,
+    const float* projmatrix,
+    const float* campos,
+    const float tan_fovx, float tan_fovy,
+    const int* radii,
+    char* geom_buffer,
+    char* binning_buffer,
+    char* img_buffer,
+    const float* dL_dmean2D,
+    const float* dL_dconic,
+    const float* dL_dinvdepth,
+    float* dL_dcolor,       // input
+
+    float* dL_dopacity,
+    float* dL_dmean3D,
+    float* dL_dcov3D,
+    float* dL_dsh,
+    float* dL_dscale,
+    float* dL_drot,
+    bool antialiasing,
+    bool debug)
+{
+    const float focal_y = height / (2.0f * tan_fovy);
+    const float focal_x = width / (2.0f * tan_fovx);
+
+    GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
+
+    if (radii == nullptr)
+    {
+        radii = geomState.internal_radii;
+    }
 
     // Take care of the rest of preprocessing. Was the precomputed covariance
     // given to us or a scales/rot pair? If precomputed, pass that. If not,

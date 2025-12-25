@@ -91,7 +91,9 @@ namespace FORWARD
         const float* bg_color,
         float* out_color,
         float* depths,
-        float* depth);
+        float* depth,
+        bool track_weights,
+        float* squared_weights);
 
     template <typename... JvpArgs>
     void renderJvp(JvpArgs&&... jvp_args);
