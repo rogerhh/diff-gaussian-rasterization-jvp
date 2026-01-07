@@ -20,4 +20,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("preprocess_backward", &PreprocessBackwardCUDA);
   m.def("mark_visible", &markVisible);
   m.def("compute_relocation", &ComputeRelocationCUDA);
+  m.def("compute_trust_region_step", &ComputeTrustRegionStepCUDA);
 }

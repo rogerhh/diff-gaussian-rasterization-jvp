@@ -21,6 +21,7 @@
 #include "cuda_rasterizer/config.h"
 #include "cuda_rasterizer/rasterizer.h"
 #include "cuda_rasterizer/utils.h"
+#include "cuda_rasterizer/trust_region.h"
 #include <fstream>
 #include <string>
 #include <functional>
@@ -148,7 +149,7 @@ RasterizeGaussiansCUDA(
         track_weights,
         squared_weights.data<float>());
   }
-  return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer, out_invdepth, squared_weights);
+  return std::make_tuple(rendered, out_color_contiguous, radii_contiguous, geomBuffer, binningBuffer, imgBuffer, out_invdepth, squared_weights);
 }
 
 std::tuple<int, 
@@ -305,7 +306,7 @@ RasterizeGaussiansCUDAJvp(
         radii_contiguous.data<int>(),
         debug);
   }
-  return std::make_tuple(rendered, out_color, radii, geomBufferJvp, binningBuffer, imgBufferJvp, out_invdepth, out_color_grad, out_invdepth_grad);
+  return std::make_tuple(rendered, out_color_contiguous, radii_contiguous, geomBufferJvp, binningBuffer, imgBufferJvp, out_invdepth, out_color_grad_contiguous, out_invdepth_grad);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -431,7 +432,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
       debug);
   }
 
-  return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations);
+  return std::make_tuple(dL_dmeans2D_contiguous, dL_dcolors_contiguous, dL_dopacity_contiguous, dL_dmeans3D_contiguous, dL_dcov3D_contiguous, dL_dsh_contiguous, dL_dscales_contiguous, dL_drotations_contiguous);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -555,7 +556,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
       debug);
   }
 
-  return std::make_tuple(dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations);
+  return std::make_tuple(dL_dopacity_contiguous, dL_dmeans3D_contiguous, dL_dcov3D_contiguous, dL_dsh_contiguous, dL_dscales_contiguous, dL_drotations_contiguous);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, 
@@ -802,4 +803,67 @@ std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 
 	return std::make_tuple(final_opacity, final_scale);
 
+}
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+ComputeTrustRegionStepCUDA(
+        const torch::Tensor& xyz_params,
+        const torch::Tensor& scaling_params,
+        const torch::Tensor& quat_params,
+        const torch::Tensor& opacity_params,
+        const torch::Tensor& shs_params,
+        torch::Tensor& xyz_params_step,
+        torch::Tensor& scaling_params_step,
+        torch::Tensor& quat_params_step,
+        torch::Tensor& opacity_params_step,
+        torch::Tensor& shs_params_step,
+        const float trust_radius,
+        const float min_mass_scaling,
+        const float max_mass_scaling,
+        const float scale_modifier,
+        const float quat_norm_tr)
+{
+
+    const int P = xyz_params.size(0);
+
+    int M = 0;
+    if(shs_params.size(0) != 0)
+    {    
+      M = shs_params.size(1);
+    }
+
+    auto xyz_params_contiguous = xyz_params.contiguous();
+    auto scaling_params_contiguous = scaling_params.contiguous();
+    auto quat_params_contiguous = quat_params.contiguous();
+    auto opacity_params_contiguous = opacity_params.contiguous();
+    auto shs_params_contiguous = shs_params.contiguous();
+
+    if(!xyz_params_step.is_contiguous()) { xyz_params_step = xyz_params_step.contiguous(); }
+    if(!scaling_params_step.is_contiguous()) { scaling_params_step = scaling_params_step.contiguous(); }
+    if(!quat_params_step.is_contiguous()) { quat_params_step = quat_params_step.contiguous(); }
+    if(!opacity_params_step.is_contiguous()) { opacity_params_step = opacity_params_step.contiguous(); }
+    if(!shs_params_step.is_contiguous()) { shs_params_step = shs_params_step.contiguous(); }
+
+    if(P != 0)
+    {
+        TRUST_REGION::ComputeTrustRegionStep(
+            P, M,
+            trust_radius,
+            min_mass_scaling,
+            max_mass_scaling,
+            quat_norm_tr,
+            xyz_params_contiguous.data<float>(),
+            (const glm::vec3*) scaling_params_contiguous.data<float>(),
+            scale_modifier,
+            (const glm::vec4*) quat_params_contiguous.data<float>(),
+            opacity_params_contiguous.data<float>(),
+            shs_params_contiguous.data<float>(),
+            xyz_params_step.data<float>(),
+            (glm::vec3*) scaling_params_step.data<float>(),
+            (glm::vec4*) quat_params_step.data<float>(),
+            opacity_params_step.data<float>(),
+            shs_params_step.data<float>());
+    }
+
+    return std::make_tuple(xyz_params_step, scaling_params_step, quat_params_step, opacity_params_step, shs_params_step);
 }

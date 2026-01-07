@@ -355,3 +355,14 @@ class GaussianRasterizer(nn.Module):
 def compute_relocation(opacity_old, scale_old, N, binoms, n_max):
     new_opacity, new_scale = _C.compute_relocation(opacity_old, scale_old, N.int(), binoms, n_max)
     return new_opacity, new_scale 
+
+def compute_trust_region_step(xyz_params, scaling_params, quat_params, opacity_params, shs_params,
+                              xyz_params_step, scaling_params_step, quat_params_step, opacity_params_step, shs_params_step,
+                              trust_radius, min_mass_scaling, max_mass_scaling, 
+                              scale_modifier, quat_norm_tr):
+    xyz_params_step, scaling_params_step, quat_params_step, opacity_params_step, shs_params_step = _C.compute_trust_region_step(
+            xyz_params, scaling_params, quat_params, opacity_params, shs_params,
+            xyz_params_step, scaling_params_step, quat_params_step, opacity_params_step, shs_params_step,
+            trust_radius, min_mass_scaling, max_mass_scaling, scale_modifier, quat_norm_tr)
+
+    return xyz_params_step, scaling_params_step, quat_params_step, opacity_params_step, shs_params_step

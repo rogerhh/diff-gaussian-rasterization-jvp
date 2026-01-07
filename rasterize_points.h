@@ -191,3 +191,21 @@ std::tuple<torch::Tensor, torch::Tensor> ComputeRelocationCUDA(
 		torch::Tensor& N,
 		torch::Tensor& binoms,
 		const int n_max);
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+ComputeTrustRegionStepCUDA(
+        const torch::Tensor& xyz_params,
+        const torch::Tensor& scaling_params,
+        const torch::Tensor& quat_params,
+        const torch::Tensor& opacity_params,
+        const torch::Tensor& shs_params,
+        torch::Tensor& xyz_params_step,
+        torch::Tensor& scaling_params_step,
+        torch::Tensor& quat_params_step,
+        torch::Tensor& opacity_params_step,
+        torch::Tensor& shs_params_step,
+        const float trust_radius,
+        const float min_mass_scaling,
+        const float max_mass_scaling,
+        const float scale_modifier,
+        const float quat_norm_tr);
