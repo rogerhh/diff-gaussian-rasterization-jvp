@@ -205,6 +205,7 @@ ComputeTrustRegionStepCUDA(
         torch::Tensor& opacity_params_step,
         torch::Tensor& shs_params_step,
         const float trust_radius,
+        const float opacity_trust_radius,
         const float min_mass_scaling,
         const float max_mass_scaling,
         const float scale_modifier,

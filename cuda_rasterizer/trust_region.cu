@@ -336,6 +336,7 @@ __forceinline__ __device__ glm::vec4 compute_quat_to_trace_coefficient(
 __global__ void compute_trust_region_step(
     const int P, const int max_coeffs,
     const float trust_radius,
+    const float opacity_trust_radius,
     const float min_opacity_scaling,
     const float max_opacity_scaling,
     const float quat_norm_tr,
@@ -401,27 +402,35 @@ __global__ void compute_trust_region_step(
     quat_params_step[idx] = min(max(quat_param_step, -quat_thresh), quat_thresh);
 
     // Opacity threshold
-    float opacity_thresh = sqrt(4.0 * opacity * trust_radius);
+    float opacity_thresh = sqrt(4.0 * opacity * opacity_trust_radius);
     float opacity_new = sigmoid(opacity_param + opacity_params_step[idx]);
     opacity_new = min(max(opacity_new, opacity - opacity_thresh), opacity + opacity_thresh);
     opacity_new = min(max(opacity_new, 1e-5f), 1.0f - 1e-5f);
-    opacity_params_step[idx] = inverse_sigmoid(opacity_new) - opacity_param;
+    opacity_params_step[idx] = opacity_params_step[idx] == 0.0? 0.0 : inverse_sigmoid(opacity_new) - opacity_param; // Keep opacity step if 0.0
 
     // DC color threshold
     float tr_color_dc = trust_radius / 3.0 / opacity_scaling;
     glm::vec3 color_dc_thresh_hellinger = sqrt(4.0f * color * tr_color_dc) / SH0;
-    glm::vec3 color_dc_thresh_opacity = opacity >= 0.99? color_dc_thresh_hellinger
-                                        : max((1.0f - color) / SH0, glm::vec3(0.0f));
-    glm::vec3 color_dc_thresh_upper = min(color_dc_thresh_hellinger, color_dc_thresh_opacity);
-    glm::vec3 color_dc_thresh_lower = color_dc_thresh_hellinger;
+    // glm::vec3 color_dc_thresh_opacity = opacity >= 0.99? color_dc_thresh_hellinger
+    //                                     : max((1.0f - color) / SH0, glm::vec3(0.0f));
+    glm::vec3 upper_color_thresh = max((1.0f - color) / SH0, glm::vec3(0.0f));
+    glm::vec3 lower_color_thresh = max((color - 0.0f) / SH0, glm::vec3(0.0f));
+    glm::vec3 color_dc_thresh_upper = min(color_dc_thresh_hellinger, upper_color_thresh);
+    glm::vec3 color_dc_thresh_lower = min(color_dc_thresh_hellinger, lower_color_thresh);
     glm::vec3* sh_param_step = ((glm::vec3*)shs_params_step) + idx * max_coeffs;
     glm::vec3 sh0_step = sh_param_step[0];
 
     sh_param_step[0] = min(max(sh0_step, -color_dc_thresh_lower), color_dc_thresh_upper);
     // Rest color threshold
-    glm::vec3 color_rest_thresh_upper = color_dc_thresh_upper / 20.0f;
-    glm::vec3 color_rest_thresh_lower = color_dc_thresh_lower / 20.0f;
+    glm::vec3 color_rest_thresh = min(color_dc_thresh_upper, color_dc_thresh_lower) / 20.0f;
     for(int c = 1; c < 16; c++) {
+        const float max_rest_coeff = 0.5f;
+        glm::vec3 shc_params = sh[c];
+        glm::vec3 upper_color_rest_thresh = max((max_rest_coeff - shc_params), glm::vec3(0.0f));
+        glm::vec3 lower_color_rest_thresh = max((shc_params - (-max_rest_coeff)), glm::vec3(0.0f));
+        glm::vec3 color_rest_thresh_upper = min(color_rest_thresh, upper_color_rest_thresh);
+        glm::vec3 color_rest_thresh_lower = min(color_rest_thresh, lower_color_rest_thresh);
+
         glm::vec3 shc_step = sh_param_step[c];
         sh_param_step[c] = min(max(shc_step, -color_rest_thresh_lower), color_rest_thresh_upper);
     }
@@ -430,6 +439,7 @@ __global__ void compute_trust_region_step(
 void TRUST_REGION::ComputeTrustRegionStep(
     const int P, const int M,
     const float trust_radius,
+    const float opacity_trust_radius,
     const float min_opacity_scaling,
     const float max_opacity_scaling,
     const float quat_norm_tr,
@@ -451,6 +461,7 @@ void TRUST_REGION::ComputeTrustRegionStep(
     compute_trust_region_step<<<grid, block>>> (
          P, M,
          trust_radius, 
+         opacity_trust_radius, 
          min_opacity_scaling, 
          max_opacity_scaling,
          quat_norm_tr,
